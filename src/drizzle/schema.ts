@@ -10,6 +10,7 @@ import {
   text,
   timestamp,
   uuid,
+  integer,
 } from "drizzle-orm/pg-core"
 
 const createdAt = timestamp("created_at", { withTimezone: true })
@@ -19,6 +20,8 @@ const updatedAt = timestamp("updated_at", { withTimezone: true })
   .notNull()
   .defaultNow()
   .$onUpdate(() => new Date())
+
+// ----- Original PPP Tables -----
 
 export const ProductTable = pgTable(
   "products",
@@ -54,7 +57,7 @@ export const ProductCustomizationTable = pgTable("product_customizations", {
   locationMessage: text("location_message")
     .notNull()
     .default(
-      "Hey! It looks like you are from <b>{country}</b>. We support Parity Purchasing Power, so if you need it, use code <b>“{coupon}”</b> to get <b>{discount}%</b> off."
+      "Hey! It looks like you are from <b>{country}</b>. We support Parity Purchasing Power, so if you need it, use code <b>\"{coupon}\"</b> to get <b>{discount}%</b> off."
     ),
   backgroundColor: text("background_color")
     .notNull()
@@ -193,5 +196,178 @@ export const UserSubscriptionTable = pgTable(
     stripeCustomerIdIndex: index(
       "user_subscriptions.stripe_customer_id_index"
     ).on(table.stripeCustomerId),
+  })
+)
+
+// ----- Betting Data Tables -----
+
+// Enums
+export const BetResultEnum = pgEnum(
+  "bet_result",
+  ["Won", "Lost", "Push", "Pending", "Canceled"]
+)
+
+export const BetTypeEnum = pgEnum(
+  "bet_type", 
+  ["Single", "Parlay", "Teaser", "Round Robin"]
+)
+
+// Single bets table
+export const SingleBetsTable = pgTable(
+  "single_bets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    datePlaced: timestamp("date_placed", { withTimezone: true }),
+    status: text("status"),
+    league: text("league"),
+    match: text("match"),
+    betType: text("bet_type"),
+    market: text("market"),
+    selection: text("selection"),
+    price: real("price"), 
+    wager: real("wager"),
+    winnings: real("winnings"),
+    payout: real("payout"),
+    result: text("result"),
+    betSlipId: text("bet_slip_id"),
+    createdAt,
+    updatedAt,
+  },
+  table => ({
+    userIdIndex: index("single_bets.user_id_index").on(table.userId),
+  })
+)
+
+// Parlay headers table
+export const ParlayHeadersTable = pgTable(
+  "parlay_headers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    datePlaced: timestamp("date_placed", { withTimezone: true }),
+    status: text("status"),
+    match: text("match"), // This contains comma-separated matches
+    betType: text("bet_type"),
+    market: text("market"),
+    selection: text("selection"),
+    price: real("price"), 
+    wager: real("wager"),
+    winnings: real("winnings"),
+    payout: real("payout"),
+    potentialPayout: real("potential_payout"),
+    result: text("result"),
+    betSlipId: text("bet_slip_id"),
+    createdAt,
+    updatedAt,
+  },
+  table => ({
+    userIdIndex: index("parlay_headers.user_id_index").on(table.userId),
+    betSlipIdIndex: index("parlay_headers.bet_slip_id_index").on(table.betSlipId),
+  })
+)
+
+// Parlay legs table
+export const ParlayLegsTable = pgTable(
+  "parlay_legs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    parlayId: uuid("parlay_id").notNull().references(() => ParlayHeadersTable.id, { onDelete: "cascade" }),
+    legNumber: integer("leg_number").notNull(),
+    status: text("status"),
+    league: text("league"),
+    match: text("match"),
+    market: text("market"),
+    selection: text("selection"),
+    price: real("price"),
+    gameDate: timestamp("game_date", { withTimezone: true }),
+    createdAt,
+    updatedAt,
+  },
+  table => ({
+    parlayIdIndex: index("parlay_legs.parlay_id_index").on(table.parlayId),
+  })
+)
+
+// Team stats aggregation table
+export const TeamStatsTable = pgTable(
+  "team_stats",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    team: text("team").notNull(),
+    league: text("league"),
+    totalBets: integer("total_bets").notNull().default(0),
+    wins: integer("wins").notNull().default(0),
+    losses: integer("losses").notNull().default(0),
+    pushes: integer("pushes").notNull().default(0),
+    pending: integer("pending").notNull().default(0),
+    createdAt,
+    updatedAt,
+  },
+  table => ({
+    userIdIndex: index("team_stats.user_id_index").on(table.userId),
+    teamIndex: index("team_stats.team_index").on(table.team),
+  })
+)
+
+// Player stats aggregation table
+export const PlayerStatsTable = pgTable(
+  "player_stats",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    player: text("player").notNull(),
+    propTypes: text("prop_types").array(), // Array of prop types
+    totalBets: integer("total_bets").notNull().default(0),
+    wins: integer("wins").notNull().default(0),
+    losses: integer("losses").notNull().default(0),
+    pushes: integer("pushes").notNull().default(0),
+    pending: integer("pending").notNull().default(0),
+    createdAt,
+    updatedAt,
+  },
+  table => ({
+    userIdIndex: index("player_stats.user_id_index").on(table.userId),
+    playerIndex: index("player_stats.player_index").on(table.player),
+  })
+)
+
+// Prop stats aggregation table
+export const PropStatsTable = pgTable(
+  "prop_stats",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    propType: text("prop_type").notNull(),
+    totalBets: integer("total_bets").notNull().default(0),
+    wins: integer("wins").notNull().default(0),
+    losses: integer("losses").notNull().default(0),
+    pushes: integer("pushes").notNull().default(0),
+    pending: integer("pending").notNull().default(0),
+    createdAt,
+    updatedAt,
+  },
+  table => ({
+    userIdIndex: index("prop_stats.user_id_index").on(table.userId),
+    propTypeIndex: index("prop_stats.prop_type_index").on(table.propType),
+  })
+)
+
+// Betting relations
+export const parlayHeadersRelations = relations(
+  ParlayHeadersTable,
+  ({ many }) => ({
+    legs: many(ParlayLegsTable)
+  })
+)
+
+export const parlayLegsRelations = relations(
+  ParlayLegsTable,
+  ({ one }) => ({
+    parlayHeader: one(ParlayHeadersTable, {
+      fields: [ParlayLegsTable.parlayId],
+      references: [ParlayHeadersTable.id],
+    })
   })
 )
