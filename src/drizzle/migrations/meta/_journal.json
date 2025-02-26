@@ -8,6 +8,13 @@
       "when": 1726499858809,
       "tag": "0000_left_agent_zero",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1708874886123,
+      "tag": "0001_betting_data_schema",
+      "breakpoints": true
     }
   ]
 }
