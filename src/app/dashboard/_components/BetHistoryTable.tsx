@@ -35,22 +35,39 @@ export function BetHistoryTable({
   currentPage: number
   totalPages: number
 }) {
+  // Safeguard against null/undefined bets array
+  if (!bets || !Array.isArray(bets)) {
+    return (
+      <div className="p-4 text-center">
+        <p>No betting data available</p>
+      </div>
+    );
+  }
+
   // Format date in a readable way
   const formatDate = (date?: Date | null) => {
     if (!date) return "Unknown"
-    return format(date, "MMM d, yyyy h:mm a")
+    try {
+      return format(date, "MMM d, yyyy h:mm a")
+    } catch (error) {
+      return "Invalid date"
+    }
   }
 
   // Format result with appropriate styling
   const formatResult = (result?: string | null) => {
     if (!result) return { text: "Pending", class: "bg-yellow-100 text-yellow-800" }
     
-    const lowerResult = result.toLowerCase()
-    if (lowerResult.includes("win")) return { text: "Win", class: "bg-green-100 text-green-800" }
-    if (lowerResult.includes("lose") || lowerResult.includes("lost")) return { text: "Loss", class: "bg-red-100 text-red-800" }
-    if (lowerResult.includes("push")) return { text: "Push", class: "bg-blue-100 text-blue-800" }
-    
-    return { text: result, class: "bg-gray-100 text-gray-800" }
+    try {
+      const lowerResult = result.toLowerCase()
+      if (lowerResult.includes("win")) return { text: "Win", class: "bg-green-100 text-green-800" }
+      if (lowerResult.includes("lose") || lowerResult.includes("lost")) return { text: "Loss", class: "bg-red-100 text-red-800" }
+      if (lowerResult.includes("push")) return { text: "Push", class: "bg-blue-100 text-blue-800" }
+      
+      return { text: result, class: "bg-gray-100 text-gray-800" }
+    } catch (error) {
+      return { text: "Unknown", class: "bg-gray-100 text-gray-800" }
+    }
   }
 
   return (
@@ -73,6 +90,8 @@ export function BetHistoryTable({
           </thead>
           <tbody>
             {bets.map(bet => {
+              if (!bet || typeof bet !== 'object') return null;
+              
               const result = formatResult(bet.result)
               
               return (
@@ -80,7 +99,7 @@ export function BetHistoryTable({
                   <td className="px-4 py-3">{formatDate(bet.date)}</td>
                   <td className="px-4 py-3">
                     <span className={`inline-block px-2 py-1 rounded text-xs ${bet.type === "Parlay" ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"}`}>
-                      {bet.type}
+                      {bet.type || "Unknown"}
                     </span>
                   </td>
                   <td className="px-4 py-3">{bet.league || "-"}</td>
@@ -91,7 +110,7 @@ export function BetHistoryTable({
                           {bet.match || "-"}
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p className="max-w-80">{bet.match}</p>
+                          <p className="max-w-80">{bet.match || "-"}</p>
                         </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
@@ -103,13 +122,13 @@ export function BetHistoryTable({
                           {bet.selection || "-"}
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p className="max-w-80">{bet.selection}</p>
+                          <p className="max-w-80">{bet.selection || "-"}</p>
                         </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   </td>
-                  <td className="px-4 py-3 text-right">{bet.odds?.toFixed(2) || "-"}</td>
-                  <td className="px-4 py-3 text-right">${bet.stake?.toFixed(2) || "-"}</td>
+                  <td className="px-4 py-3 text-right">{bet.odds ? bet.odds.toFixed(2) : "-"}</td>
+                  <td className="px-4 py-3 text-right">${bet.stake ? bet.stake.toFixed(2) : "-"}</td>
                   <td className="px-4 py-3 text-center">
                     <span 
                       className={`inline-block px-2 py-1 text-xs rounded ${result.class}`}
