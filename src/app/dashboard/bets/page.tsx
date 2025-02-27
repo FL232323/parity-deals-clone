@@ -6,7 +6,8 @@ import { SingleBetsTable, ParlayHeadersTable } from "@/drizzle/schema"
 import { desc, eq } from "drizzle-orm"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import { UploadIcon } from "lucide-react"
+import { UploadIcon, TrashIcon } from "lucide-react"
+import { ClearDataButton } from "../_components/ClearDataButton"
 
 export default async function BetHistoryPage({
   searchParams,
@@ -87,15 +88,18 @@ export default async function BetHistoryPage({
     
     return (
       <>
-        <h1 className="mb-6 text-3xl font-semibold flex justify-between items-center">
-          Betting History
-          <Button asChild>
-            <Link href="/dashboard/upload">
-              <UploadIcon className="size-4 mr-2" />
-              Upload Data
-            </Link>
-          </Button>
-        </h1>
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-semibold">Betting History</h1>
+          <div className="flex gap-3">
+            <ClearDataButton />
+            <Button asChild>
+              <Link href="/dashboard/upload">
+                <UploadIcon className="size-4 mr-2" />
+                Upload Data
+              </Link>
+            </Button>
+          </div>
+        </div>
         
         {bets && bets.length > 0 ? (
           <Card>
@@ -121,15 +125,19 @@ export default async function BetHistoryPage({
     console.error("Error loading bet history:", error)
     return (
       <>
-        <h1 className="mb-6 text-3xl font-semibold flex justify-between items-center">
-          Betting History
-          <Button asChild>
-            <Link href="/dashboard/upload">
-              <UploadIcon className="size-4 mr-2" />
-              Upload Data
-            </Link>
-          </Button>
-        </h1>
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-semibold">Betting History</h1>
+          <div className="flex gap-3">
+            <ClearDataButton />
+            <Button asChild>
+              <Link href="/dashboard/upload">
+                <UploadIcon className="size-4 mr-2" />
+                Upload Data
+              </Link>
+            </Button>
+          </div>
+        </div>
+        
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <h2 className="text-2xl font-semibold mb-2">Error loading betting data</h2>
           <p className="mb-6 text-muted-foreground">
