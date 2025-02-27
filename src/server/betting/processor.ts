@@ -115,46 +115,44 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       propStats
     } = extractBettingData(rawData, userId)
 
-    // Store in database using a transaction
-    await db.transaction(async (tx) => {
-      // Store single bets
-      if (singleBets.length > 0) {
-        await tx.insert(SingleBetsTable).values(singleBets)
-      }
+    // Store in database without using transactions (Neon HTTP driver doesn't support them)
+    // Store single bets
+    if (singleBets.length > 0) {
+      await db.insert(SingleBetsTable).values(singleBets)
+    }
 
-      // Store parlay headers and legs
-      for (const parlayHeader of parlayHeaders) {
-        const [inserted] = await tx.insert(ParlayHeadersTable)
-          .values(parlayHeader)
-          .returning({ id: ParlayHeadersTable.id })
+    // Store parlay headers and legs
+    for (const parlayHeader of parlayHeaders) {
+      const [inserted] = await db.insert(ParlayHeadersTable)
+        .values(parlayHeader)
+        .returning({ id: ParlayHeadersTable.id })
 
-        // Find corresponding legs
-        const legs = parlayLegs.filter(leg => leg.parlayId === parlayHeader.betSlipId)
+      // Find corresponding legs
+      const legs = parlayLegs.filter(leg => leg.parlayId === parlayHeader.betSlipId)
+      
+      if (legs.length > 0 && inserted) {
+        // Update parlayId to use the database ID instead of betSlipId
+        const legsWithCorrectId = legs.map(leg => ({
+          ...leg,
+          parlayId: inserted.id
+        }))
         
-        if (legs.length > 0 && inserted) {
-          // Update parlayId to use the database ID instead of betSlipId
-          const legsWithCorrectId = legs.map(leg => ({
-            ...leg,
-            parlayId: inserted.id
-          }))
-          
-          await tx.insert(ParlayLegsTable).values(legsWithCorrectId)
-        }
+        await db.insert(ParlayLegsTable).values(legsWithCorrectId)
       }
+    }
 
-      // Store aggregated stats
-      if (teamStats.length > 0) {
-        await tx.insert(TeamStatsTable).values(teamStats)
-      }
-      
-      if (playerStats.length > 0) {
-        await tx.insert(PlayerStatsTable).values(playerStats)
-      }
-      
-      if (propStats.length > 0) {
-        await tx.insert(PropStatsTable).values(propStats)
-      }
-    })
+    // Store aggregated stats
+    if (teamStats.length > 0) {
+      await db.insert(TeamStatsTable).values(teamStats)
+    }
+    
+    if (playerStats.length > 0) {
+      await db.insert(PlayerStatsTable).values(playerStats)
+    }
+    
+    if (propStats.length > 0) {
+      await db.insert(PropStatsTable).values(propStats)
+    }
 
     return {
       success: true,
