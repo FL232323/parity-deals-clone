@@ -13,7 +13,7 @@ type RawBettingData = string[]
 
 interface SingleBet {
   userId: string
-  datePlaced?: Date
+  datePlaced?: Date | null
   status?: string
   league?: string
   match?: string
@@ -41,7 +41,7 @@ interface ParlayLeg {
   market?: string
   selection?: string
   price?: number
-  gameDate?: Date
+  gameDate?: Date | null
 }
 
 interface TeamStat {
@@ -115,20 +115,25 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       propStats
     } = extractBettingData(rawData, userId)
 
+    // Sanitize data before database insert
+    const sanitizedSingleBets = singleBets.map(sanitizeBet)
+    const sanitizedParlayHeaders = parlayHeaders.map(sanitizeBet)
+    const sanitizedParlayLegs = parlayLegs.map(sanitizeParlayLeg)
+
     // Store in database without using transactions (Neon HTTP driver doesn't support them)
     // Store single bets
-    if (singleBets.length > 0) {
-      await db.insert(SingleBetsTable).values(singleBets)
+    if (sanitizedSingleBets.length > 0) {
+      await db.insert(SingleBetsTable).values(sanitizedSingleBets)
     }
 
     // Store parlay headers and legs
-    for (const parlayHeader of parlayHeaders) {
+    for (const parlayHeader of sanitizedParlayHeaders) {
       const [inserted] = await db.insert(ParlayHeadersTable)
         .values(parlayHeader)
         .returning({ id: ParlayHeadersTable.id })
 
       // Find corresponding legs
-      const legs = parlayLegs.filter(leg => leg.parlayId === parlayHeader.betSlipId)
+      const legs = sanitizedParlayLegs.filter(leg => leg.parlayId === parlayHeader.betSlipId)
       
       if (legs.length > 0 && inserted) {
         // Update parlayId to use the database ID instead of betSlipId
@@ -156,9 +161,9 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
 
     return {
       success: true,
-      singleBetsCount: singleBets.length,
-      parlaysCount: parlayHeaders.length,
-      parlayLegsCount: parlayLegs.length,
+      singleBetsCount: sanitizedSingleBets.length,
+      parlaysCount: sanitizedParlayHeaders.length,
+      parlayLegsCount: sanitizedParlayLegs.length,
       teamStatsCount: teamStats.length,
       playerStatsCount: playerStats.length,
       propStatsCount: propStats.length
@@ -169,6 +174,47 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       success: false,
       error: error instanceof Error ? error.message : "Unknown error"
     }
+  }
+}
+
+/**
+ * Sanitize a bet object to ensure valid date values
+ */
+function sanitizeBet(bet: SingleBet | ParlayHeader): SingleBet | ParlayHeader {
+  return {
+    ...bet,
+    datePlaced: isValidDate(bet.datePlaced) ? bet.datePlaced : null
+  }
+}
+
+/**
+ * Sanitize a parlay leg object to ensure valid date values
+ */
+function sanitizeParlayLeg(leg: ParlayLeg): ParlayLeg {
+  return {
+    ...leg,
+    gameDate: isValidDate(leg.gameDate) ? leg.gameDate : null
+  }
+}
+
+/**
+ * Check if a date is valid
+ */
+function isValidDate(date: any): boolean {
+  if (!date) return false
+  if (!(date instanceof Date)) return false
+  return !isNaN(date.getTime())
+}
+
+/**
+ * Parse a date string and return a valid Date or null
+ */
+function parseDate(dateStr: string): Date | null {
+  try {
+    const date = new Date(dateStr)
+    return isValidDate(date) ? date : null
+  } catch (e) {
+    return null
   }
 }
 
@@ -258,7 +304,7 @@ function extractBettingData(data: RawBettingData, userId: string) {
         
         const parlayHeader: ParlayHeader = {
           userId,
-          datePlaced: isDate(betInfo[0]) ? new Date(betInfo[0]) : undefined,
+          datePlaced: isDate(betInfo[0]) ? parseDate(betInfo[0]) : null,
           status: betInfo[1],
           league: betInfo[2],
           match: betInfo[3],
@@ -298,7 +344,7 @@ function extractBettingData(data: RawBettingData, userId: string) {
             market: legData[3],
             selection: legData[4],
             price: legData[5] ? parseFloat(legData[5]) : undefined,
-            gameDate: isDate(legData[6]) ? new Date(legData[6]) : undefined
+            gameDate: isDate(legData[6]) ? parseDate(legData[6]) : null
           }
           
           parlayLegs.push(parlayLeg)
@@ -401,7 +447,7 @@ function extractBettingData(data: RawBettingData, userId: string) {
         // This is a single bet
         const singleBet: SingleBet = {
           userId,
-          datePlaced: isDate(betInfo[0]) ? new Date(betInfo[0]) : undefined,
+          datePlaced: isDate(betInfo[0]) ? parseDate(betInfo[0]) : null,
           status: betInfo[1],
           league: betInfo[2],
           match: betInfo[3],
