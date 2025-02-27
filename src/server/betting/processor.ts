@@ -84,26 +84,108 @@ interface PropStat {
  */
 export async function processBettingData(fileBuffer: Buffer, userId: string) {
   try {
-    // Parse the Excel file
-    const workbook = XLSX.read(fileBuffer, { cellDates: true })
-    
-    // Extract raw data from the first worksheet
-    const worksheet = workbook.Sheets[workbook.SheetNames[0]]
-    const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { header: 1 })
-    
-    // Convert to array of strings to match the python processor format
-    const rawData: RawBettingData = []
-    jsonData.forEach(row => {
-      if (Array.isArray(row)) {
-        row.forEach(cell => {
-          if (cell !== undefined && cell !== null) {
-            rawData.push(String(cell))
-          }
-        })
-      } else if (row !== undefined && row !== null) {
-        rawData.push(String(row))
-      }
+    // Step 1: Parse the Excel file with full options to handle different formats
+    const workbook = XLSX.read(fileBuffer, {
+      cellDates: true,
+      cellStyles: true,
+      cellNF: true,
+      type: 'buffer',
+      WTF: true // Parse everything possible
     })
+
+    console.log("Workbook parsed successfully, sheets:", workbook.SheetNames)
+    
+    // Check if we have sheets
+    if (workbook.SheetNames.length === 0) {
+      throw new Error("No sheets found in the workbook")
+    }
+    
+    // Step 2: Convert to raw strings for our processing
+    // First try to get as CSV with newlines to preserve structure
+    let rawData: RawBettingData = []
+    
+    try {
+      // Try first to get CSV format with newlines
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
+      const csvData = XLSX.utils.sheet_to_csv(firstSheet, { 
+        blankrows: false,
+        FS: '\t',
+        RS: '|||' // Special row separator we'll split on later
+      })
+      
+      // Split the CSV and clean up empty rows
+      rawData = csvData.split('|||')
+        .filter(line => line.trim() !== '')
+        .map(line => line.trim())
+      
+      console.log(`CSV method: Extracted ${rawData.length} raw data items`)
+    } catch (e) {
+      console.error("Error with CSV extraction, falling back to JSON:", e)
+      
+      // Fall back to JSON method
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]]
+      const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { header: 1 })
+      
+      // Convert to array of strings
+      jsonData.forEach(row => {
+        if (Array.isArray(row)) {
+          row.forEach(cell => {
+            if (cell !== undefined && cell !== null) {
+              rawData.push(String(cell))
+            }
+          })
+        } else if (row !== undefined && row !== null) {
+          rawData.push(String(row))
+        }
+      })
+      
+      console.log(`JSON method: Extracted ${rawData.length} raw data items`)
+    }
+    
+    // If we still have no data, try direct cell extraction
+    if (rawData.length === 0) {
+      console.log("No data extracted, trying direct cell extraction")
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:Z1000')
+      
+      for (let row = range.s.r; row <= range.e.r; ++row) {
+        for (let col = range.s.c; col <= range.e.c; ++col) {
+          const cellAddress = XLSX.utils.encode_cell({ r: row, c: col })
+          const cell = sheet[cellAddress]
+          
+          if (cell && cell.v !== undefined && cell.v !== null) {
+            rawData.push(String(cell.v))
+          }
+        }
+      }
+      
+      console.log(`Direct cell extraction: Got ${rawData.length} raw data items`)
+    }
+    
+    if (rawData.length === 0) {
+      throw new Error("Failed to extract any data from the file")
+    }
+    
+    // Clean up XML-like structure if present
+    rawData = preprocessExcelData(rawData)
+    console.log(`After preprocessing: ${rawData.length} data items`)
+    
+    // Find where the real data starts by looking for date patterns
+    let dataStartIndex = 0
+    for (let i = 0; i < Math.min(100, rawData.length); i++) {
+      if (isDate(rawData[i])) {
+        dataStartIndex = i
+        break
+      }
+    }
+    
+    // Assume headers are the 13 elements before the first date if possible
+    const effectiveStartIndex = Math.max(0, dataStartIndex - 13)
+    const headers = rawData.slice(effectiveStartIndex, dataStartIndex)
+    
+    console.log("Headers:", headers)
+    console.log("First data row:", rawData[dataStartIndex])
+    console.log("Data start index:", dataStartIndex)
 
     // Process the data
     const {
@@ -113,7 +195,9 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       teamStats,
       playerStats,
       propStats
-    } = extractBettingData(rawData, userId)
+    } = extractBettingData(rawData.slice(dataStartIndex), userId)
+
+    console.log(`Extracted: ${singleBets.length} single bets, ${parlayHeaders.length} parlays`)
 
     // Sanitize data before database insert
     const sanitizedSingleBets = singleBets.map(sanitizeBet)
@@ -174,398 +258,5 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       success: false,
       error: error instanceof Error ? error.message : "Unknown error"
     }
-  }
-}
-
-/**
- * Sanitize a bet object to ensure valid date values
- */
-function sanitizeBet(bet: SingleBet | ParlayHeader): SingleBet | ParlayHeader {
-  return {
-    ...bet,
-    datePlaced: isValidDate(bet.datePlaced) ? bet.datePlaced : null
-  }
-}
-
-/**
- * Sanitize a parlay leg object to ensure valid date values
- */
-function sanitizeParlayLeg(leg: ParlayLeg): ParlayLeg {
-  return {
-    ...leg,
-    gameDate: isValidDate(leg.gameDate) ? leg.gameDate : null
-  }
-}
-
-/**
- * Check if a date is valid
- */
-function isValidDate(date: any): boolean {
-  if (!date) return false
-  if (!(date instanceof Date)) return false
-  return !isNaN(date.getTime())
-}
-
-/**
- * Parse a date string and return a valid Date or null
- */
-function parseDate(dateStr: string): Date | null {
-  try {
-    const date = new Date(dateStr)
-    return isValidDate(date) ? date : null
-  } catch (e) {
-    return null
-  }
-}
-
-/**
- * Extract betting data from raw string array
- * @param data Raw betting data as string array
- * @param userId User ID
- * @returns Extracted betting data objects
- */
-function extractBettingData(data: RawBettingData, userId: string) {
-  // Headers are the first 13 elements
-  const headers = data.slice(0, 13)
-  
-  const singleBets: SingleBet[] = []
-  const parlayHeaders: ParlayHeader[] = []
-  const parlayLegs: ParlayLeg[] = []
-  const teamStatsMap = new Map<string, TeamStat>()
-  const playerStatsMap = new Map<string, PlayerStat>()
-  const propStatsMap = new Map<string, PropStat>()
-  
-  let currentPosition = 13
-  
-  /**
-   * Check if a value matches the date format: D MMM YYYY @ H:MMam/pm
-   */
-  function isDate(value: string): boolean {
-    const datePattern = /\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+@\s+\d{1,2}:\d{2}(?:am|pm)/
-    return datePattern.test(value)
-  }
-  
-  /**
-   * Check if a value is a 19-digit bet ID
-   */
-  function isBetId(value: string): boolean {
-    return /^\d{19}$/.test(value.trim())
-  }
-  
-  /**
-   * Extract teams from match string
-   */
-  function extractTeams(matchStr?: string): string[] {
-    if (!matchStr) return []
-    
-    const trimmed = matchStr.trim()
-    if (trimmed.includes(' vs ')) {
-      return trimmed.split(' vs ').map(team => team.trim())
-    }
-    return []
-  }
-  
-  /**
-   * Extract player name and prop type from market string
-   */
-  function extractPlayerAndProp(marketStr?: string): [string | null, string | null] {
-    if (!marketStr) return [null, null]
-    
-    if (marketStr.includes(' - ')) {
-      const parts = marketStr.split(' - ', 2)
-      const player = parts[0].trim()
-      const propType = parts.length > 1 ? parts[1].trim() : null
-      return [player, propType]
-    }
-    return [null, null]
-  }
-
-  // Parse through the data in the same pattern as the Python processor
-  while (currentPosition < data.length) {
-    const currValue = data[currentPosition]
-    
-    if (isDate(currValue)) {
-      // This could be the start of a bet
-      const betInfo = data.slice(currentPosition, currentPosition + 13)
-      currentPosition += 13
-      
-      if (currentPosition >= data.length) break
-      
-      if (betInfo.some(item => item.includes("MULTIPLE"))) {
-        // This is a parlay
-        let betId: string | undefined
-        
-        if (currentPosition < data.length && isBetId(data[currentPosition])) {
-          betId = data[currentPosition]
-          currentPosition += 1
-        } else {
-          betId = betInfo[betInfo.length - 1]
-        }
-        
-        const parlayHeader: ParlayHeader = {
-          userId,
-          datePlaced: isDate(betInfo[0]) ? parseDate(betInfo[0]) : null,
-          status: betInfo[1],
-          league: betInfo[2],
-          match: betInfo[3],
-          betType: betInfo[4],
-          market: betInfo[5],
-          selection: betInfo[6],
-          price: betInfo[7] ? parseFloat(betInfo[7]) : undefined,
-          wager: betInfo[8] ? parseFloat(betInfo[8]) : undefined,
-          winnings: betInfo[9] ? parseFloat(betInfo[9]) : undefined,
-          payout: betInfo[10] ? parseFloat(betInfo[10]) : undefined,
-          potentialPayout: betInfo[11] ? parseFloat(betInfo[11]) : undefined,
-          result: betInfo[12],
-          betSlipId: betId
-        }
-        
-        parlayHeaders.push(parlayHeader)
-        
-        // Count the number of legs by checking for commas in the match field
-        const numLegs = parlayHeader.match ? 
-          (parlayHeader.match.match(/,/g) || []).length + 1 : 0
-        
-        // Process parlay legs
-        let legNum = 1
-        while (legNum <= numLegs && currentPosition + 7 <= data.length) {
-          const legData = data.slice(currentPosition, currentPosition + 7)
-          
-          if (isDate(legData[0])) {
-            break
-          }
-          
-          const parlayLeg: ParlayLeg = {
-            parlayId: betId || "",
-            legNumber: legNum,
-            status: legData[0],
-            league: legData[1],
-            match: legData[2],
-            market: legData[3],
-            selection: legData[4],
-            price: legData[5] ? parseFloat(legData[5]) : undefined,
-            gameDate: isDate(legData[6]) ? parseDate(legData[6]) : null
-          }
-          
-          parlayLegs.push(parlayLeg)
-          
-          // Process team stats from this leg
-          const teams = extractTeams(parlayLeg.match)
-          teams.forEach(team => {
-            if (!teamStatsMap.has(team)) {
-              teamStatsMap.set(team, {
-                userId,
-                team,
-                league: parlayLeg.league,
-                totalBets: 0,
-                wins: 0,
-                losses: 0,
-                pushes: 0,
-                pending: 0
-              })
-            }
-            
-            const stat = teamStatsMap.get(team)!
-            stat.totalBets++
-            
-            if (parlayLeg.status === 'Won' || parlayLeg.status === 'Win') {
-              stat.wins++
-            } else if (parlayLeg.status === 'Lost' || parlayLeg.status === 'Lose') {
-              stat.losses++
-            } else if (parlayLeg.status === 'Push') {
-              stat.pushes++
-            } else {
-              stat.pending++
-            }
-          })
-          
-          // Process player and prop stats
-          const [player, propType] = extractPlayerAndProp(parlayLeg.market)
-          if (player) {
-            if (!playerStatsMap.has(player)) {
-              playerStatsMap.set(player, {
-                userId,
-                player,
-                propTypes: propType ? [propType] : [],
-                totalBets: 0,
-                wins: 0,
-                losses: 0,
-                pushes: 0,
-                pending: 0
-              })
-            }
-            
-            const stat = playerStatsMap.get(player)!
-            stat.totalBets++
-            
-            if (propType && !stat.propTypes?.includes(propType)) {
-              stat.propTypes = [...(stat.propTypes || []), propType]
-            }
-            
-            if (parlayLeg.status === 'Won' || parlayLeg.status === 'Win') {
-              stat.wins++
-            } else if (parlayLeg.status === 'Lost' || parlayLeg.status === 'Lose') {
-              stat.losses++
-            } else if (parlayLeg.status === 'Push') {
-              stat.pushes++
-            } else {
-              stat.pending++
-            }
-          }
-          
-          if (propType) {
-            if (!propStatsMap.has(propType)) {
-              propStatsMap.set(propType, {
-                userId,
-                propType,
-                totalBets: 0,
-                wins: 0,
-                losses: 0,
-                pushes: 0,
-                pending: 0
-              })
-            }
-            
-            const stat = propStatsMap.get(propType)!
-            stat.totalBets++
-            
-            if (parlayLeg.status === 'Won' || parlayLeg.status === 'Win') {
-              stat.wins++
-            } else if (parlayLeg.status === 'Lost' || parlayLeg.status === 'Lose') {
-              stat.losses++
-            } else if (parlayLeg.status === 'Push') {
-              stat.pushes++
-            } else {
-              stat.pending++
-            }
-          }
-          
-          currentPosition += 7
-          legNum++
-        }
-      } else {
-        // This is a single bet
-        const singleBet: SingleBet = {
-          userId,
-          datePlaced: isDate(betInfo[0]) ? parseDate(betInfo[0]) : null,
-          status: betInfo[1],
-          league: betInfo[2],
-          match: betInfo[3],
-          betType: betInfo[4],
-          market: betInfo[5],
-          selection: betInfo[6],
-          price: betInfo[7] ? parseFloat(betInfo[7]) : undefined,
-          wager: betInfo[8] ? parseFloat(betInfo[8]) : undefined,
-          winnings: betInfo[9] ? parseFloat(betInfo[9]) : undefined,
-          payout: betInfo[10] ? parseFloat(betInfo[10]) : undefined,
-          result: betInfo[12],
-          betSlipId: betInfo[betInfo.length - 1]
-        }
-        
-        singleBets.push(singleBet)
-        
-        // Process team stats from this single bet
-        const teams = extractTeams(singleBet.match)
-        teams.forEach(team => {
-          if (!teamStatsMap.has(team)) {
-            teamStatsMap.set(team, {
-              userId,
-              team,
-              league: singleBet.league,
-              totalBets: 0,
-              wins: 0,
-              losses: 0,
-              pushes: 0,
-              pending: 0
-            })
-          }
-          
-          const stat = teamStatsMap.get(team)!
-          stat.totalBets++
-          
-          if (singleBet.result === 'Won' || singleBet.result === 'Win') {
-            stat.wins++
-          } else if (singleBet.result === 'Lost' || singleBet.result === 'Lose') {
-            stat.losses++
-          } else if (singleBet.result === 'Push') {
-            stat.pushes++
-          } else {
-            stat.pending++
-          }
-        })
-        
-        // Process player and prop stats
-        const [player, propType] = extractPlayerAndProp(singleBet.market)
-        if (player) {
-          if (!playerStatsMap.has(player)) {
-            playerStatsMap.set(player, {
-              userId,
-              player,
-              propTypes: propType ? [propType] : [],
-              totalBets: 0,
-              wins: 0,
-              losses: 0,
-              pushes: 0,
-              pending: 0
-            })
-          }
-          
-          const stat = playerStatsMap.get(player)!
-          stat.totalBets++
-          
-          if (propType && !stat.propTypes?.includes(propType)) {
-            stat.propTypes = [...(stat.propTypes || []), propType]
-          }
-          
-          if (singleBet.result === 'Won' || singleBet.result === 'Win') {
-            stat.wins++
-          } else if (singleBet.result === 'Lost' || singleBet.result === 'Lose') {
-            stat.losses++
-          } else if (singleBet.result === 'Push') {
-            stat.pushes++
-          } else {
-            stat.pending++
-          }
-        }
-        
-        if (propType) {
-          if (!propStatsMap.has(propType)) {
-            propStatsMap.set(propType, {
-              userId,
-              propType,
-              totalBets: 0,
-              wins: 0,
-              losses: 0,
-              pushes: 0,
-              pending: 0
-            })
-          }
-          
-          const stat = propStatsMap.get(propType)!
-          stat.totalBets++
-          
-          if (singleBet.result === 'Won' || singleBet.result === 'Win') {
-            stat.wins++
-          } else if (singleBet.result === 'Lost' || singleBet.result === 'Lose') {
-            stat.losses++
-          } else if (singleBet.result === 'Push') {
-            stat.pushes++
-          } else {
-            stat.pending++
-          }
-        }
-      }
-    } else {
-      currentPosition++
-    }
-  }
-  
-  return {
-    singleBets,
-    parlayHeaders,
-    parlayLegs,
-    teamStats: Array.from(teamStatsMap.values()),
-    playerStats: Array.from(playerStatsMap.values()),
-    propStats: Array.from(propStatsMap.values())
   }
 }
