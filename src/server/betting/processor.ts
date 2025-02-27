@@ -8,6 +8,8 @@ import {
   PropStatsTable 
 } from "@/drizzle/schema"
 import * as XLSX from 'xlsx'
+// Import the extractBettingData function from extract-data.ts
+import { extractBettingData } from './extract-data'
 
 type RawBettingData = string[]
 
@@ -187,7 +189,7 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
     console.log("First data row:", rawData[dataStartIndex])
     console.log("Data start index:", dataStartIndex)
 
-    // Process the data
+    // Use the imported extractBettingData function to process the data
     const {
       singleBets,
       parlayHeaders,
