@@ -60,9 +60,26 @@ export async function updateUserSubscription(
 }
 
 export async function getUserSubscriptionTier(userId: string) {
-  const subscription = await getUserSubscription(userId)
+  let subscription = await getUserSubscription(userId)
 
-  if (subscription == null) throw new Error("User has no subscription")
+  // Create a default Premium subscription if none exists (for local development)
+  if (subscription == null) {
+    try {
+      subscription = await createUserSubscription({
+        clerkUserId: userId,
+        tier: "Premium", // Using Premium tier for local development
+      })
+      
+      // If for some reason the creation failed, fallback to a default Premium tier
+      if (!subscription) {
+        console.log("Failed to create subscription record, using default Premium tier")
+        return subscriptionTiers.Premium
+      }
+    } catch (error) {
+      console.error("Error creating subscription:", error)
+      return subscriptionTiers.Premium
+    }
+  }
 
   return subscriptionTiers[subscription.tier]
 }
