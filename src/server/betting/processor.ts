@@ -260,3 +260,107 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
     }
   }
 }
+
+/**
+ * Pre-process Excel data to remove XML-like structure
+ */
+function preprocessExcelData(rawData: string[]): string[] {
+  // Look for XML patterns and clean them up
+  return rawData.map(item => {
+    // Remove common XML tags
+    return item
+      .replace(/<ss:Row>|<ss:Cell>|<\/ss:Cell>|<ss:Data ss:Type="[^"]*">|<\/ss:Data>|<\/ss:Row>/g, '')
+      .replace(/<?xml[^>]*>|<ss:Workbook[^>]*>|<ss:Worksheet[^>]*>|<ss:Table>|<\/ss:Table>|<\/ss:Worksheet>|<\/ss:Workbook>/g, '')
+      .trim();
+  }).filter(item => item !== ''); // Remove empty items
+}
+
+/**
+ * Sanitize a bet object to ensure valid date values
+ */
+function sanitizeBet(bet: SingleBet | ParlayHeader): SingleBet | ParlayHeader {
+  return {
+    ...bet,
+    datePlaced: isValidDate(bet.datePlaced) ? bet.datePlaced : null
+  }
+}
+
+/**
+ * Sanitize a parlay leg object to ensure valid date values
+ */
+function sanitizeParlayLeg(leg: ParlayLeg): ParlayLeg {
+  return {
+    ...leg,
+    gameDate: isValidDate(leg.gameDate) ? leg.gameDate : null
+  }
+}
+
+/**
+ * Check if a date is valid
+ */
+function isValidDate(date: any): boolean {
+  if (!date) return false
+  if (!(date instanceof Date)) return false
+  return !isNaN(date.getTime())
+}
+
+/**
+ * Parse a date string and return a valid Date or null
+ */
+function parseDate(dateStr: string): Date | null {
+  try {
+    // First try standard date parsing
+    let date = new Date(dateStr)
+    
+    // If that fails, try to manually parse the Hard Rock format
+    if (isNaN(date.getTime())) {
+      // Handle D MMM YYYY @ H:MMam/pm format
+      const match = dateStr.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+@\s+(\d{1,2}):(\d{2})([ap]m)/i)
+      if (match) {
+        const [_, day, month, year, hour, minute, ampm] = match
+        
+        // Convert month to number
+        const months = { 'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5, 
+                        'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11 }
+        
+        const monthNum = months[month as keyof typeof months] || 0
+        
+        // Convert 12-hour to 24-hour
+        let hours = parseInt(hour)
+        if (ampm.toLowerCase() === 'pm' && hours < 12) hours += 12
+        if (ampm.toLowerCase() === 'am' && hours === 12) hours = 0
+        
+        date = new Date(parseInt(year), monthNum, parseInt(day), hours, parseInt(minute))
+      }
+    }
+    
+    return isValidDate(date) ? date : null
+  } catch (e) {
+    console.error("Date parsing error:", e, "for string:", dateStr)
+    return null
+  }
+}
+
+/**
+ * Check if a value matches the date format: D MMM YYYY @ H:MMam/pm
+ */
+function isDate(value: string): boolean {
+  if (!value || typeof value !== 'string') return false
+  
+  // Common date formats from Hard Rock
+  const datePatterns = [
+    /\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+@\s+\d{1,2}:\d{2}(?:am|pm)/i,  // 12 Jan 2023 @ 4:30pm
+    /\d{1,2}\/\d{1,2}\/\d{2,4}\s+\d{1,2}:\d{2}\s*(?:am|pm)?/i,      // 01/12/23 4:30 PM
+    /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/                                // 2023-01-12T16:30
+  ]
+  
+  return datePatterns.some(pattern => pattern.test(value))
+}
+
+/**
+ * Check if a value is a 19-digit bet ID
+ */
+function isBetId(value: string): boolean {
+  if (!value || typeof value !== 'string') return false
+  return /^\d{19}$/.test(value.trim())
+}
