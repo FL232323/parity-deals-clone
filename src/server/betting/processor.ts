@@ -8,10 +8,9 @@ import {
   PropStatsTable 
 } from "@/drizzle/schema"
 import * as XLSX from 'xlsx'
-// Import the extractBettingData function from extract-data.ts
 import { extractBettingData } from './extract-data'
 
-type RawBettingData = string[]
+type RawBettingRow = string[][]
 
 interface SingleBet {
   userId: string
@@ -102,92 +101,213 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       throw new Error("No sheets found in the workbook")
     }
     
-    // Step 2: Convert raw content to a string to handle the XML-like format
-    let rawXml = ''
+    // Step 2: Get the first sheet
+    const sheetName = workbook.SheetNames[0]
+    const sheet = workbook.Sheets[sheetName]
+    
+    // Track if we're using XML parsing or regular sheet parsing
+    let usingXmlParsing = false
+    
+    // Step 3: Try to extract data as rows (preserving row structure)
+    let rawRows: RawBettingRow = []
+    
+    // First attempt: use sheet_to_json to get rows with header mapping
     try {
-      // Get the sheet content as raw XML-like string to preserve structure
-      const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      rawXml = XLSX.utils.sheet_to_csv(sheet, { FS: '\n', RS: '\n' })
+      console.log("Attempting to parse sheet normally")
+      // Convert sheet to array of arrays (each row as an array of values)
+      const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as string[][]
+      
+      // Filter out empty rows and process data
+      rawRows = data.filter(row => row.some(cell => cell !== ""))
+      console.log(`Parsed ${rawRows.length} rows from sheet`)
+      
+      // If we have less than 2 rows (header + at least 1 data row), try XML parsing
+      if (rawRows.length < 2) {
+        usingXmlParsing = true
+      }
     } catch (e) {
-      console.error("Error getting sheet as CSV:", e)
-      // Try again with direct access to the file data
-      rawXml = fileBuffer.toString('utf-8')
+      console.error("Error parsing sheet normally:", e)
+      usingXmlParsing = true
     }
     
-    // Step 3: Extract the cell values from the XML format
-    let rawData: RawBettingData = []
-    
-    // The pattern of XML structure shows data is in <ss:Data ss:Type="String">VALUE</ss:Data> tags
-    const dataRegex = /<ss:Data[^>]*>(.*?)<\/ss:Data>/g
-    let match
-    
-    while ((match = dataRegex.exec(rawXml)) !== null) {
-      // match[1] contains the content between the tags
-      if (match[1]) {
-        rawData.push(match[1].trim())
+    // Fallback to XML parsing if normal parsing failed
+    if (usingXmlParsing) {
+      console.log("Falling back to XML parsing")
+      
+      try {
+        // Get the raw XML content
+        let rawXml = ''
+        try {
+          // Convert the sheet to CSV with line breaks to maintain row structure
+          rawXml = XLSX.utils.sheet_to_csv(sheet, { FS: '|||', RS: '\n' })
+        } catch (e) {
+          console.error("Error getting sheet as CSV:", e)
+          // Try again with direct access to the file data
+          rawXml = fileBuffer.toString('utf-8')
+        }
+        
+        // Extract rows using XML structure pattern matching
+        const rows: string[][] = []
+        let currentRow: string[] = []
+        
+        // Extract rows by finding <ss:Row> tags
+        const rowRegex = /<ss:Row[^>]*>(.*?)<\/ss:Row>/gs
+        let rowMatch
+        
+        while ((rowMatch = rowRegex.exec(rawXml)) !== null) {
+          const rowContent = rowMatch[1]
+          currentRow = []
+          
+          // Extract cells from each row
+          const cellRegex = /<ss:Cell[^>]*>.*?<ss:Data[^>]*>(.*?)<\/ss:Data>.*?<\/ss:Cell>/gs
+          let cellMatch
+          
+          while ((cellMatch = cellRegex.exec(rowContent)) !== null) {
+            // Add cell value to current row
+            if (cellMatch[1]) {
+              currentRow.push(cellMatch[1].trim())
+            } else {
+              currentRow.push("")
+            }
+          }
+          
+          // If we found any cells, add the row
+          if (currentRow.length > 0) {
+            rows.push([...currentRow])
+          }
+        }
+        
+        // If we didn't find any rows with the XML structure, try simple line parsing
+        if (rows.length === 0) {
+          console.log("XML structure not found, trying line-based parsing")
+          
+          // Split into lines
+          const lines = rawXml.split('\n')
+          
+          // Process each line
+          for (const line of lines) {
+            // Skip empty lines
+            if (line.trim() === '') continue
+            
+            // Split row into cells using the delimiter
+            const cells = line.split('|||')
+            
+            // If we have cells, add as a row
+            if (cells.length > 0 && cells.some(cell => cell.trim() !== '')) {
+              rows.push(cells.map(cell => cell.trim()))
+            }
+          }
+        }
+        
+        // Use the rows parsed from XML
+        rawRows = rows
+        console.log(`Parsed ${rawRows.length} rows from XML structure`)
+      } catch (e) {
+        console.error("Error with XML parsing fallback:", e)
       }
     }
     
-    console.log(`Extracted ${rawData.length} cells from XML structure`)
-    
-    // If the regex didn't work, try the preprocessing method as a fallback
-    if (rawData.length === 0) {
-      console.log("Falling back to preprocessing method")
-      
-      // Convert to lines first
-      const lines = rawXml.split('\n')
-      
-      // Clean up XML-like structure
-      rawData = lines.map(line => line.trim())
-        .filter(line => line !== '')
-        .map(line => {
-          // Extract content from XML tags
-          const match = line.match(/<ss:Data[^>]*>(.*?)<\/ss:Data>/)
-          return match ? match[1].trim() : line.trim()
-        })
-        .filter(item => item !== '')
-      
-      console.log(`Preprocessed ${rawData.length} items`)
-    }
-    
-    // If we still have no data, try to extract as direct cell values
-    if (rawData.length === 0) {
-      console.log("No data extracted, trying direct cell extraction")
-      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+    // If we still don't have rows, try cell by cell extraction as a last resort
+    if (rawRows.length === 0) {
+      console.log("Trying cell-by-cell extraction")
       
       // Get all cell references
       const cellRefs = Object.keys(sheet).filter(key => !key.startsWith('!'))
       
-      // Extract cell values
+      // Group cells by row
+      const rowMap = new Map<number, Map<number, string>>()
+      
       for (const cellRef of cellRefs) {
-        const cell = sheet[cellRef]
-        if (cell && cell.v !== undefined && cell.v !== null) {
-          rawData.push(String(cell.v))
+        // Parse cell reference (e.g., "A1" -> row 1, col 0)
+        const colMatch = cellRef.match(/[A-Z]+/)
+        const rowMatch = cellRef.match(/\d+/)
+        
+        if (colMatch && rowMatch) {
+          // Convert column letter to number (A=0, B=1, etc.)
+          const colStr = colMatch[0]
+          let colNum = 0
+          for (let i = 0; i < colStr.length; i++) {
+            colNum = colNum * 26 + (colStr.charCodeAt(i) - 64)
+          }
+          colNum-- // Adjust to 0-indexed
+          
+          // Get row number (1-indexed in Excel)
+          const rowNum = parseInt(rowMatch[0])
+          
+          // Get cell value
+          const cell = sheet[cellRef]
+          if (cell && cell.v !== undefined && cell.v !== null) {
+            // Create row map if it doesn't exist
+            if (!rowMap.has(rowNum)) {
+              rowMap.set(rowNum, new Map<number, string>())
+            }
+            
+            // Add cell to row
+            rowMap.get(rowNum)!.set(colNum, String(cell.v))
+          }
         }
       }
       
-      console.log(`Direct cell extraction: Got ${rawData.length} raw data items`)
+      // Convert to array of rows
+      const rows: string[][] = []
+      
+      // Sort rows by row number
+      const sortedRowNums = Array.from(rowMap.keys()).sort((a, b) => a - b)
+      
+      for (const rowNum of sortedRowNums) {
+        const rowMap2 = rowMap.get(rowNum)!
+        const rowArray: string[] = []
+        
+        // Sort cells by column number
+        const sortedColNums = Array.from(rowMap2.keys()).sort((a, b) => a - b)
+        
+        // Fill in any gaps in columns
+        let maxCol = sortedColNums[sortedColNums.length - 1] || 0
+        for (let col = 0; col <= maxCol; col++) {
+          rowArray.push(rowMap2.get(col) || "")
+        }
+        
+        rows.push(rowArray)
+      }
+      
+      rawRows = rows
+      console.log(`Extracted ${rawRows.length} rows cell by cell`)
     }
     
-    if (rawData.length === 0) {
+    // Final check: do we have any data?
+    if (rawRows.length === 0) {
       throw new Error("Failed to extract any data from the file")
     }
     
-    // Skip the header row (first 13 items)
-    // The headers are Date Placed, Status, League, Match, etc.
-    const headerItems = 13
+    // Process the rows
+    console.log("Sample rows:", rawRows.slice(0, 3))
     
-    if (rawData.length > headerItems) {
-      console.log("Headers:", rawData.slice(0, headerItems))
-      
-      // Skip past the header row
-      rawData = rawData.slice(headerItems)
-      
-      console.log(`After skipping headers: ${rawData.length} data items`)
-      console.log("First data items:", rawData.slice(0, Math.min(20, rawData.length)))
+    // Check for headers in the first row
+    let startRowIndex = 0
+    let hasHeaders = false
+    
+    // If first row contains keywords like "Date Placed", "Status", "League", etc.
+    // then consider it as a header row
+    if (rawRows.length > 0) {
+      const firstRow = rawRows[0].map(cell => (cell || "").toString().toLowerCase())
+      if (
+        firstRow.some(cell => 
+          cell.includes("date") || 
+          cell.includes("status") || 
+          cell.includes("league") || 
+          cell.includes("match")
+        )
+      ) {
+        hasHeaders = true
+        startRowIndex = 1
+        console.log("Header row detected, starting from row 1")
+      }
     }
     
-    // Process the data using the improved extractBettingData function
+    // Filter to data rows only
+    const dataRows = rawRows.slice(startRowIndex)
+    
+    // Process the data using the improved extraction with rows instead of flat array
     const {
       singleBets,
       parlayHeaders,
@@ -195,9 +315,9 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       teamStats,
       playerStats,
       propStats
-    } = extractBettingData(rawData, userId)
+    } = extractBettingData(dataRows, userId)
 
-    console.log(`Extracted: ${singleBets.length} single bets, ${parlayHeaders.length} parlays`)
+    console.log(`Extracted: ${singleBets.length} single bets, ${parlayHeaders.length} parlays with ${parlayLegs.length} legs`)
 
     // Sanitize data before database insert
     const sanitizedSingleBets = singleBets.map(sanitizeBet)
