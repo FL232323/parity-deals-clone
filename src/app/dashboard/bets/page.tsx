@@ -121,45 +121,60 @@ export default async function BetHistoryPage({
     // Safe handling of parlay legs - only proceed if we have parlays
     let legsMap: Record<string, any[]> = {}
     
-    if (parlayBets.length > 0) {
-      // Get all parlay IDs from the current page
-      const parlayIds = parlayBets.map(bet => bet.id).filter(Boolean)
+    if (parlayBets && parlayBets.length > 0) {
+      // Get all parlay IDs from the current page and ensure they're valid
+      const parlayIds = parlayBets
+        .map(bet => bet?.id)
+        .filter(id => id !== undefined && id !== null) as string[]
       
-      if (parlayIds.length > 0) {
-        // Get parlay legs for all parlays on this page
-        const parlayLegs = await db
-          .select({
-            id: ParlayLegsTable.id,
-            parlayId: ParlayLegsTable.parlayId,
-            legNumber: ParlayLegsTable.legNumber,
-            status: ParlayLegsTable.status,
-            league: ParlayLegsTable.league,
-            match: ParlayLegsTable.match,
-            market: ParlayLegsTable.market,
-            selection: ParlayLegsTable.selection,
-            price: ParlayLegsTable.price,
-            gameDate: ParlayLegsTable.gameDate,
-          })
-          .from(ParlayLegsTable)
-          .where(sql`${ParlayLegsTable.parlayId} IN (${parlayIds.join(',')})`)
-          .orderBy(ParlayLegsTable.legNumber)
-        
-        // Group legs by parlay ID
-        legsMap = parlayLegs.reduce((acc, leg) => {
-          if (!acc[leg.parlayId]) {
-            acc[leg.parlayId] = []
+      if (parlayIds && parlayIds.length > 0) {
+        try {
+          // Build the WHERE clause safely
+          const whereClause = sql`${ParlayLegsTable.parlayId} IN (${sql.join(parlayIds.map(id => sql.literal(id)), sql.fragment`, `)})`
+          
+          // Get parlay legs for all parlays on this page
+          const parlayLegs = await db
+            .select({
+              id: ParlayLegsTable.id,
+              parlayId: ParlayLegsTable.parlayId,
+              legNumber: ParlayLegsTable.legNumber,
+              status: ParlayLegsTable.status,
+              league: ParlayLegsTable.league,
+              match: ParlayLegsTable.match,
+              market: ParlayLegsTable.market,
+              selection: ParlayLegsTable.selection,
+              price: ParlayLegsTable.price,
+              gameDate: ParlayLegsTable.gameDate,
+            })
+            .from(ParlayLegsTable)
+            .where(whereClause)
+            .orderBy(ParlayLegsTable.legNumber)
+          
+          // Group legs by parlay ID
+          if (parlayLegs && parlayLegs.length > 0) {
+            legsMap = parlayLegs.reduce((acc, leg) => {
+              if (leg && leg.parlayId) {
+                if (!acc[leg.parlayId]) {
+                  acc[leg.parlayId] = []
+                }
+                acc[leg.parlayId].push(leg)
+              }
+              return acc
+            }, {} as Record<string, any[]>)
           }
-          acc[leg.parlayId].push(leg)
-          return acc
-        }, {} as Record<string, any[]>)
+        } catch (error) {
+          console.error("Error fetching parlay legs:", error)
+          // Continue with empty legs map
+        }
       }
     }
     
     // Combine and sort by date
-    const bets = [...singleBets, ...parlayBets]
+    const bets = [...(singleBets || []), ...(parlayBets || [])]
+      .filter(bet => bet !== null && bet !== undefined)
       .sort((a, b) => {
-        if (!a.date || !b.date) return 0
-        return b.date.getTime() - a.date.getTime()
+        if (!a?.date || !b?.date) return 0
+        return new Date(b.date).getTime() - new Date(a.date).getTime()
       })
       .slice(0, pageSize)
     
