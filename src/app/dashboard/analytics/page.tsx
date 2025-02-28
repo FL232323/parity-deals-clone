@@ -2,16 +2,20 @@ import { HasPermission } from "@/components/HasPermission"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   CHART_INTERVALS,
-  getViewsByCountryChartData,
-  getViewsByDayChartData,
-  getViewsByPPPChartData,
-} from "@/server/db/productViews"
+  getBettingDataByDay,
+  getBettingDataByLeague,
+  getTeamPerformanceData,
+  getPropBetPerformance,
+  getWinRateByBetType
+} from "@/server/db/bettingAnalytics"
 import { canAccessAnalytics } from "@/server/permissions"
 import { auth } from "@clerk/nextjs/server"
-import { ChevronDownIcon, SearchCheck } from "lucide-react"
-import { ViewsByCountryChart } from "../_components/charts/ViewsByCountryChart"
-import { ViewsByPPPChart } from "../_components/charts/ViewsByPPPChart"
-import { ViewsByDayChart } from "../_components/charts/ViewsByDayChart"
+import { ChevronDownIcon, Dices, LineChart, TrendingUp, Trophy } from "lucide-react"
+import { BetsByDayChart } from "../_components/charts/BetsByDayChart"
+import { BetsByLeagueChart } from "../_components/charts/BetsByLeagueChart"
+import { TeamPerformanceChart } from "../_components/charts/TeamPerformanceChart"
+import { PropBetPerformanceChart } from "../_components/charts/PropBetPerformanceChart"
+import { WinRateByBetTypeChart } from "../_components/charts/WinRateByBetTypeChart"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,7 +25,6 @@ import {
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { createURL } from "@/lib/utils"
-import { getProduct, getProducts } from "@/server/db/products"
 import { TimezoneDropdownMenuItem } from "../_components/TimezoneDropdownMenuItem"
 
 export default async function AnalyticsPage({
@@ -30,7 +33,6 @@ export default async function AnalyticsPage({
   searchParams: {
     interval?: string
     timezone?: string
-    productId?: string
   }
 }) {
   const { userId, redirectToSignIn } = auth()
@@ -40,12 +42,11 @@ export default async function AnalyticsPage({
     CHART_INTERVALS[searchParams.interval as keyof typeof CHART_INTERVALS] ??
     CHART_INTERVALS.last7Days
   const timezone = searchParams.timezone || "UTC"
-  const productId = searchParams.productId
 
   return (
     <>
       <div className="mb-6 flex justify-between items-baseline">
-        <h1 className="text-3xl font-semibold">Analytics</h1>
+        <h1 className="text-3xl font-semibold">Betting Analytics</h1>
         <HasPermission permission={canAccessAnalytics}>
           <div className="flex gap-2">
             <DropdownMenu>
@@ -69,11 +70,6 @@ export default async function AnalyticsPage({
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
-            <ProductDropdown
-              userId={userId}
-              selectedProductId={productId}
-              searchParams={searchParams}
-            />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline">
@@ -97,25 +93,34 @@ export default async function AnalyticsPage({
           </div>
         </HasPermission>
       </div>
+      
       <HasPermission permission={canAccessAnalytics} renderFallback>
         <div className="flex flex-col gap-8">
-          <ViewsByDayCard
+          <BettingActivityCard
             interval={interval}
             timezone={timezone}
             userId={userId}
-            productId={productId}
           />
-          <ViewsByPPPCard
-            interval={interval}
-            timezone={timezone}
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <BetTypePerformanceCard
+              interval={interval}
+              timezone={timezone}
+              userId={userId}
+            />
+            <BetsByLeagueCard
+              interval={interval}
+              timezone={timezone}
+              userId={userId}
+            />
+          </div>
+          
+          <TeamStatsCard
             userId={userId}
-            productId={productId}
           />
-          <ViewsByCountryCard
-            interval={interval}
-            timezone={timezone}
+          
+          <PropBetPerformanceCard
             userId={userId}
-            productId={productId}
           />
         </div>
       </HasPermission>
@@ -123,98 +128,138 @@ export default async function AnalyticsPage({
   )
 }
 
-async function ProductDropdown({
+async function BettingActivityCard({
+  interval,
+  timezone,
   userId,
-  selectedProductId,
-  searchParams,
+}: {
+  interval: (typeof CHART_INTERVALS)[keyof typeof CHART_INTERVALS]
+  timezone: string
+  userId: string
+}) {
+  const chartData = await getBettingDataByDay({
+    interval,
+    timezone,
+    userId,
+  })
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center">
+        <div className="flex flex-col gap-1">
+          <CardTitle>Betting Activity</CardTitle>
+        </div>
+        <LineChart className="ml-auto h-5 w-5 text-muted-foreground" />
+      </CardHeader>
+      <CardContent>
+        <BetsByDayChart chartData={chartData} />
+      </CardContent>
+    </Card>
+  )
+}
+
+async function BetTypePerformanceCard({
+  interval,
+  timezone,
+  userId,
+}: {
+  interval: (typeof CHART_INTERVALS)[keyof typeof CHART_INTERVALS]
+  timezone: string
+  userId: string
+}) {
+  const chartData = await getWinRateByBetType({
+    interval,
+    timezone,
+    userId,
+  })
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center">
+        <div className="flex flex-col gap-1">
+          <CardTitle>Win Rate by Bet Type</CardTitle>
+        </div>
+        <Trophy className="ml-auto h-5 w-5 text-muted-foreground" />
+      </CardHeader>
+      <CardContent>
+        <WinRateByBetTypeChart chartData={chartData} />
+      </CardContent>
+    </Card>
+  )
+}
+
+async function BetsByLeagueCard({
+  interval,
+  timezone,
+  userId,
+}: {
+  interval: (typeof CHART_INTERVALS)[keyof typeof CHART_INTERVALS]
+  timezone: string
+  userId: string
+}) {
+  const chartData = await getBettingDataByLeague({
+    interval,
+    timezone,
+    userId,
+  })
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center">
+        <div className="flex flex-col gap-1">
+          <CardTitle>Betting by League</CardTitle>
+        </div>
+        <TrendingUp className="ml-auto h-5 w-5 text-muted-foreground" />
+      </CardHeader>
+      <CardContent>
+        <BetsByLeagueChart chartData={chartData} />
+      </CardContent>
+    </Card>
+  )
+}
+
+async function TeamStatsCard({
+  userId,
 }: {
   userId: string
-  selectedProductId?: string
-  searchParams: Record<string, string>
 }) {
-  const products = await getProducts(userId)
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline">
-          {products.find(p => p.id === selectedProductId)?.name ??
-            "All Products"}
-          <ChevronDownIcon className="size-4 ml-2" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent>
-        <DropdownMenuItem asChild>
-          <Link
-            href={createURL("/dashboard/analytics", searchParams, {
-              productId: undefined,
-            })}
-          >
-            All Products
-          </Link>
-        </DropdownMenuItem>
-        {products.map(product => (
-          <DropdownMenuItem asChild key={product.id}>
-            <Link
-              href={createURL("/dashboard/analytics", searchParams, {
-                productId: product.id,
-              })}
-            >
-              {product.name}
-            </Link>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-async function ViewsByDayCard(
-  props: Parameters<typeof getViewsByDayChartData>[0]
-) {
-  const chartData = await getViewsByDayChartData(props)
+  const chartData = await getTeamPerformanceData({
+    userId,
+    limit: 3
+  })
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Visitors Per Day</CardTitle>
+        <CardTitle>Team Performance</CardTitle>
       </CardHeader>
       <CardContent>
-        <ViewsByDayChart chartData={chartData} />
+        <TeamPerformanceChart chartData={chartData} />
       </CardContent>
     </Card>
   )
 }
 
-async function ViewsByPPPCard(
-  props: Parameters<typeof getViewsByPPPChartData>[0]
-) {
-  const chartData = await getViewsByPPPChartData(props)
+async function PropBetPerformanceCard({
+  userId,
+}: {
+  userId: string
+}) {
+  const chartData = await getPropBetPerformance({
+    userId,
+    limit: 10
+  })
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>Visitors Per PPP Group</CardTitle>
+      <CardHeader className="flex flex-row items-center">
+        <div className="flex flex-col gap-1">
+          <CardTitle>Prop Bet Performance</CardTitle>
+        </div>
+        <Dices className="ml-auto h-5 w-5 text-muted-foreground" />
       </CardHeader>
       <CardContent>
-        <ViewsByPPPChart chartData={chartData} />
-      </CardContent>
-    </Card>
-  )
-}
-
-async function ViewsByCountryCard(
-  props: Parameters<typeof getViewsByCountryChartData>[0]
-) {
-  const chartData = await getViewsByCountryChartData(props)
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Visitors Per Country</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <ViewsByCountryChart chartData={chartData} />
+        <PropBetPerformanceChart chartData={chartData} />
       </CardContent>
     </Card>
   )
