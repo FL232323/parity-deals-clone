@@ -102,62 +102,67 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       throw new Error("No sheets found in the workbook")
     }
     
-    // Step 2: Convert to raw strings for our processing
-    // First try to get as CSV with newlines to preserve structure
-    let rawData: RawBettingData = []
-    
+    // Step 2: Convert raw content to a string to handle the XML-like format
+    let rawXml = ''
     try {
-      // Try first to get CSV format with newlines
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
-      const csvData = XLSX.utils.sheet_to_csv(firstSheet, { 
-        blankrows: false,
-        FS: '\t',
-        RS: '|||' // Special row separator we'll split on later
-      })
-      
-      // Split the CSV and clean up empty rows
-      rawData = csvData.split('|||')
-        .filter(line => line.trim() !== '')
-        .map(line => line.trim())
-      
-      console.log(`CSV method: Extracted ${rawData.length} raw data items`)
+      // Get the sheet content as raw XML-like string to preserve structure
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      rawXml = XLSX.utils.sheet_to_csv(sheet, { FS: '\n', RS: '\n' })
     } catch (e) {
-      console.error("Error with CSV extraction, falling back to JSON:", e)
-      
-      // Fall back to JSON method
-      const worksheet = workbook.Sheets[workbook.SheetNames[0]]
-      const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { header: 1 })
-      
-      // Convert to array of strings
-      jsonData.forEach(row => {
-        if (Array.isArray(row)) {
-          row.forEach(cell => {
-            if (cell !== undefined && cell !== null) {
-              rawData.push(String(cell))
-            }
-          })
-        } else if (row !== undefined && row !== null) {
-          rawData.push(String(row))
-        }
-      })
-      
-      console.log(`JSON method: Extracted ${rawData.length} raw data items`)
+      console.error("Error getting sheet as CSV:", e)
+      // Try again with direct access to the file data
+      rawXml = fileBuffer.toString('utf-8')
     }
     
-    // If we still have no data, try direct cell extraction
+    // Step 3: Extract the cell values from the XML format
+    let rawData: RawBettingData = []
+    
+    // The pattern of XML structure shows data is in <ss:Data ss:Type="String">VALUE</ss:Data> tags
+    const dataRegex = /<ss:Data[^>]*>(.*?)<\/ss:Data>/g
+    let match
+    
+    while ((match = dataRegex.exec(rawXml)) !== null) {
+      // match[1] contains the content between the tags
+      if (match[1]) {
+        rawData.push(match[1].trim())
+      }
+    }
+    
+    console.log(`Extracted ${rawData.length} cells from XML structure`)
+    
+    // If the regex didn't work, try the preprocessing method as a fallback
+    if (rawData.length === 0) {
+      console.log("Falling back to preprocessing method")
+      
+      // Convert to lines first
+      const lines = rawXml.split('\n')
+      
+      // Clean up XML-like structure
+      rawData = lines.map(line => line.trim())
+        .filter(line => line !== '')
+        .map(line => {
+          // Extract content from XML tags
+          const match = line.match(/<ss:Data[^>]*>(.*?)<\/ss:Data>/)
+          return match ? match[1].trim() : line.trim()
+        })
+        .filter(item => item !== '')
+      
+      console.log(`Preprocessed ${rawData.length} items`)
+    }
+    
+    // If we still have no data, try to extract as direct cell values
     if (rawData.length === 0) {
       console.log("No data extracted, trying direct cell extraction")
       const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:Z1000')
       
-      for (let row = range.s.r; row <= range.e.r; ++row) {
-        for (let col = range.s.c; col <= range.e.c; ++col) {
-          const cellAddress = XLSX.utils.encode_cell({ r: row, c: col })
-          const cell = sheet[cellAddress]
-          
-          if (cell && cell.v !== undefined && cell.v !== null) {
-            rawData.push(String(cell.v))
-          }
+      // Get all cell references
+      const cellRefs = Object.keys(sheet).filter(key => !key.startsWith('!'))
+      
+      // Extract cell values
+      for (const cellRef of cellRefs) {
+        const cell = sheet[cellRef]
+        if (cell && cell.v !== undefined && cell.v !== null) {
+          rawData.push(String(cell.v))
         }
       }
       
@@ -168,28 +173,21 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       throw new Error("Failed to extract any data from the file")
     }
     
-    // Clean up XML-like structure if present
-    rawData = preprocessExcelData(rawData)
-    console.log(`After preprocessing: ${rawData.length} data items`)
+    // Skip the header row (first 13 items)
+    // The headers are Date Placed, Status, League, Match, etc.
+    const headerItems = 13
     
-    // Find where the real data starts by looking for date patterns
-    let dataStartIndex = 0
-    for (let i = 0; i < Math.min(100, rawData.length); i++) {
-      if (isDate(rawData[i])) {
-        dataStartIndex = i
-        break
-      }
+    if (rawData.length > headerItems) {
+      console.log("Headers:", rawData.slice(0, headerItems))
+      
+      // Skip past the header row
+      rawData = rawData.slice(headerItems)
+      
+      console.log(`After skipping headers: ${rawData.length} data items`)
+      console.log("First data items:", rawData.slice(0, Math.min(20, rawData.length)))
     }
     
-    // Assume headers are the 13 elements before the first date if possible
-    const effectiveStartIndex = Math.max(0, dataStartIndex - 13)
-    const headers = rawData.slice(effectiveStartIndex, dataStartIndex)
-    
-    console.log("Headers:", headers)
-    console.log("First data row:", rawData[dataStartIndex])
-    console.log("Data start index:", dataStartIndex)
-
-    // Use the imported extractBettingData function to process the data
+    // Process the data using the improved extractBettingData function
     const {
       singleBets,
       parlayHeaders,
@@ -197,7 +195,7 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       teamStats,
       playerStats,
       propStats
-    } = extractBettingData(rawData.slice(dataStartIndex), userId)
+    } = extractBettingData(rawData, userId)
 
     console.log(`Extracted: ${singleBets.length} single bets, ${parlayHeaders.length} parlays`)
 
@@ -209,39 +207,49 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
     // Store in database without using transactions (Neon HTTP driver doesn't support them)
     // Store single bets
     if (sanitizedSingleBets.length > 0) {
+      console.log("Storing single bets:", sanitizedSingleBets.length)
       await db.insert(SingleBetsTable).values(sanitizedSingleBets)
     }
 
     // Store parlay headers and legs
-    for (const parlayHeader of sanitizedParlayHeaders) {
-      const [inserted] = await db.insert(ParlayHeadersTable)
-        .values(parlayHeader)
-        .returning({ id: ParlayHeadersTable.id })
-
-      // Find corresponding legs
-      const legs = sanitizedParlayLegs.filter(leg => leg.parlayId === parlayHeader.betSlipId)
+    if (sanitizedParlayHeaders.length > 0) {
+      console.log("Storing parlay headers:", sanitizedParlayHeaders.length)
       
-      if (legs.length > 0 && inserted) {
-        // Update parlayId to use the database ID instead of betSlipId
-        const legsWithCorrectId = legs.map(leg => ({
-          ...leg,
-          parlayId: inserted.id
-        }))
+      for (const parlayHeader of sanitizedParlayHeaders) {
+        const [inserted] = await db.insert(ParlayHeadersTable)
+          .values(parlayHeader)
+          .returning({ id: ParlayHeadersTable.id })
+
+        // Find corresponding legs
+        const legs = sanitizedParlayLegs.filter(leg => leg.parlayId === parlayHeader.betSlipId)
         
-        await db.insert(ParlayLegsTable).values(legsWithCorrectId)
+        if (legs.length > 0 && inserted) {
+          console.log(`Storing ${legs.length} legs for parlay ${inserted.id}`)
+          
+          // Update parlayId to use the database ID instead of betSlipId
+          const legsWithCorrectId = legs.map(leg => ({
+            ...leg,
+            parlayId: inserted.id
+          }))
+          
+          await db.insert(ParlayLegsTable).values(legsWithCorrectId)
+        }
       }
     }
 
     // Store aggregated stats
     if (teamStats.length > 0) {
+      console.log("Storing team stats:", teamStats.length)
       await db.insert(TeamStatsTable).values(teamStats)
     }
     
     if (playerStats.length > 0) {
+      console.log("Storing player stats:", playerStats.length)
       await db.insert(PlayerStatsTable).values(playerStats)
     }
     
     if (propStats.length > 0) {
+      console.log("Storing prop stats:", propStats.length)
       await db.insert(PropStatsTable).values(propStats)
     }
 
@@ -261,20 +269,6 @@ export async function processBettingData(fileBuffer: Buffer, userId: string) {
       error: error instanceof Error ? error.message : "Unknown error"
     }
   }
-}
-
-/**
- * Pre-process Excel data to remove XML-like structure
- */
-function preprocessExcelData(rawData: string[]): string[] {
-  // Look for XML patterns and clean them up
-  return rawData.map(item => {
-    // Remove common XML tags
-    return item
-      .replace(/<ss:Row>|<ss:Cell>|<\/ss:Cell>|<ss:Data ss:Type="[^"]*">|<\/ss:Data>|<\/ss:Row>/g, '')
-      .replace(/<?xml[^>]*>|<ss:Workbook[^>]*>|<ss:Worksheet[^>]*>|<ss:Table>|<\/ss:Table>|<\/ss:Worksheet>|<\/ss:Workbook>/g, '')
-      .trim();
-  }).filter(item => item !== ''); // Remove empty items
 }
 
 /**
@@ -304,65 +298,4 @@ function isValidDate(date: any): boolean {
   if (!date) return false
   if (!(date instanceof Date)) return false
   return !isNaN(date.getTime())
-}
-
-/**
- * Parse a date string and return a valid Date or null
- */
-function parseDate(dateStr: string): Date | null {
-  try {
-    // First try standard date parsing
-    let date = new Date(dateStr)
-    
-    // If that fails, try to manually parse the Hard Rock format
-    if (isNaN(date.getTime())) {
-      // Handle D MMM YYYY @ H:MMam/pm format
-      const match = dateStr.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+@\s+(\d{1,2}):(\d{2})([ap]m)/i)
-      if (match) {
-        const [_, day, month, year, hour, minute, ampm] = match
-        
-        // Convert month to number
-        const months = { 'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5, 
-                        'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11 }
-        
-        const monthNum = months[month as keyof typeof months] || 0
-        
-        // Convert 12-hour to 24-hour
-        let hours = parseInt(hour)
-        if (ampm.toLowerCase() === 'pm' && hours < 12) hours += 12
-        if (ampm.toLowerCase() === 'am' && hours === 12) hours = 0
-        
-        date = new Date(parseInt(year), monthNum, parseInt(day), hours, parseInt(minute))
-      }
-    }
-    
-    return isValidDate(date) ? date : null
-  } catch (e) {
-    console.error("Date parsing error:", e, "for string:", dateStr)
-    return null
-  }
-}
-
-/**
- * Check if a value matches the date format: D MMM YYYY @ H:MMam/pm
- */
-function isDate(value: string): boolean {
-  if (!value || typeof value !== 'string') return false
-  
-  // Common date formats from Hard Rock
-  const datePatterns = [
-    /\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+@\s+\d{1,2}:\d{2}(?:am|pm)/i,  // 12 Jan 2023 @ 4:30pm
-    /\d{1,2}\/\d{1,2}\/\d{2,4}\s+\d{1,2}:\d{2}\s*(?:am|pm)?/i,      // 01/12/23 4:30 PM
-    /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/                                // 2023-01-12T16:30
-  ]
-  
-  return datePatterns.some(pattern => pattern.test(value))
-}
-
-/**
- * Check if a value is a 19-digit bet ID
- */
-function isBetId(value: string): boolean {
-  if (!value || typeof value !== 'string') return false
-  return /^\d{19}$/.test(value.trim())
 }
