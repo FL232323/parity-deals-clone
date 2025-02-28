@@ -55,10 +55,13 @@ export function BetHistoryTable({
   const [expandedParlays, setExpandedParlays] = useState<Record<string, boolean>>({})
 
   // Safeguard against null/undefined bets array
-  if (!bets || !Array.isArray(bets)) {
+  if (!bets || !Array.isArray(bets) || bets.length === 0) {
     return (
       <div className="p-4 text-center">
-        <p>No betting data available</p>
+        <p>No betting data available for the current page.</p>
+        <p className="text-muted-foreground mt-2">
+          Try uploading some betting data or navigating to a different page.
+        </p>
       </div>
     );
   }
@@ -110,6 +113,9 @@ export function BetHistoryTable({
     }))
   }
 
+  // Ensure parlayLegs is a valid object
+  const safeLegsMap: Record<string, ParlayLeg[]> = parlayLegs || {}
+
   return (
     <div className="p-4">
       <div className="overflow-x-auto">
@@ -130,11 +136,11 @@ export function BetHistoryTable({
           </thead>
           <tbody>
             {bets.map(bet => {
-              if (!bet || typeof bet !== 'object') return null;
+              if (!bet || typeof bet !== 'object' || !bet.id) return null;
               
               const result = formatResult(bet.result)
               const isParlay = bet.type === "Parlay"
-              const betLegs = parlayLegs[bet.id] || []
+              const betLegs = isParlay ? (safeLegsMap[bet.id] || []) : []
               const isExpanded = expandedParlays[bet.id] || false
               
               return (
@@ -217,7 +223,9 @@ export function BetHistoryTable({
                   </tr>
                   
                   {/* Render parlay legs if this is a parlay and it's expanded */}
-                  {isParlay && isExpanded && betLegs.map(leg => {
+                  {isParlay && isExpanded && betLegs.length > 0 && betLegs.map(leg => {
+                    if (!leg || !leg.legNumber) return null;
+                    
                     const legResult = formatResult(leg.status, true)
                     
                     return (
@@ -276,6 +284,15 @@ export function BetHistoryTable({
                       </tr>
                     )
                   })}
+                  
+                  {/* Show message when there are no legs for an expanded parlay */}
+                  {isParlay && isExpanded && betLegs.length === 0 && (
+                    <tr className="border-b bg-muted/20">
+                      <td colSpan={10} className="px-4 py-3 text-center text-sm text-muted-foreground">
+                        No leg details available for this parlay.
+                      </td>
+                    </tr>
+                  )}
                 </React.Fragment>
               )
             })}
