@@ -6,7 +6,7 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart"
 import { formatCompactNumber } from "@/lib/formatters"
-import { Cell, Legend, Pie, PieChart } from "recharts"
+import { Cell, Legend, Pie, PieChart, Tooltip as RechartsTooltip } from "recharts"
 
 export function TeamPerformanceChart({
   chartData,
@@ -41,10 +41,10 @@ export function TeamPerformanceChart({
     }
   }
 
-  if (chartData.length === 0) {
+  if (!chartData || chartData.length === 0) {
     return (
       <p className="flex items-center justify-center text-muted-foreground min-h-[150px] max-h-[250px]">
-        No data available
+        No team performance data available
       </p>
     )
   }
@@ -90,7 +90,7 @@ export function TeamPerformanceChart({
                   <Cell key={`cell-${index}`} fill={entry.color} />
                 ))}
               </Pie>
-              <Tooltip content={<ChartTooltipContent />} />
+              <RechartsTooltip content={<ChartTooltipContent />} />
             </PieChart>
           </ChartContainer>
         </div>
