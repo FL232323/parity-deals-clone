@@ -1,5 +1,6 @@
 "use client"
 
+import React, { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon, InfoIcon } from "lucide-react"
 import Link from "next/link"
@@ -11,7 +12,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { useState } from "react"
 
 interface ParlayLeg {
   id: string
