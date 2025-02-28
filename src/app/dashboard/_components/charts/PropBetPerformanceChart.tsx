@@ -6,7 +6,7 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart"
 import { formatCompactNumber } from "@/lib/formatters"
-import { Bar, BarChart, Cell, Legend, XAxis, YAxis } from "recharts"
+import { Bar, BarChart, XAxis, YAxis } from "recharts"
 
 export function PropBetPerformanceChart({
   chartData,
@@ -24,12 +24,12 @@ export function PropBetPerformanceChart({
   const chartConfig = {
     winRate: {
       label: "Win Rate (%)",
-      color: "hsl(200, 70%, 50%)",
+      color: "hsl(120, 70%, 50%)",
     },
     totalBets: {
       label: "Total Bets",
-      color: "hsl(280, 70%, 50%)",
-    },
+      color: "hsl(200, 70%, 50%)",
+    }
   }
 
   if (chartData.length === 0) {
@@ -40,25 +40,11 @@ export function PropBetPerformanceChart({
     )
   }
 
-  // Format the data for the chart
+  // Format the data for better display
   const formattedData = chartData.map(item => ({
     ...item,
     winRate: parseFloat(item.winRate),
-    tooltipLabel: `${item.propType}: ${item.wins}/${item.totalBets} (${item.winRate}%)`,
   }));
-
-  // Get color based on win rate (red to green gradient)
-  const getColor = (winRate: number) => {
-    // Below 40% is red, above 60% is green, in between is a gradient
-    if (winRate < 40) return "#ef4444";
-    if (winRate > 60) return "#22c55e";
-    
-    // Calculate gradient between red and green
-    const redComponent = Math.round(255 * (1 - (winRate - 40) / 20));
-    const greenComponent = Math.round(255 * ((winRate - 40) / 20));
-    
-    return `rgb(${redComponent}, ${greenComponent}, 0)`;
-  };
 
   return (
     <ChartContainer
@@ -67,36 +53,25 @@ export function PropBetPerformanceChart({
     >
       <BarChart 
         accessibilityLayer 
-        data={formattedData} 
-        layout="vertical" 
-        margin={{ left: 100 }}
+        data={formattedData}
+        layout="vertical"
+        margin={{ left: 120 }}
       >
-        <XAxis 
-          type="number" 
-          tickLine={false} 
-          tickMargin={10} 
-          tickFormatter={value => `${value}%`}
-          domain={[0, 100]} 
-        />
+        <XAxis type="number" tickLine={false} tickMargin={10} />
         <YAxis 
           dataKey="propType" 
           type="category" 
           tickLine={false} 
           tickMargin={10}
-          width={100}
+          width={120}
         />
-        <ChartTooltip content={<ChartTooltipContent nameKey="tooltipLabel" />} />
+        <ChartTooltip content={<ChartTooltipContent nameKey="propType"/>} />
         <Bar 
           dataKey="winRate" 
-          fill="var(--color-winRate)"
-          minPointSize={3}
+          fill="var(--color-winRate)" 
           radius={[0, 4, 4, 0]}
-        >
-          {formattedData.map((entry, index) => (
-            <Cell key={`cell-${index}`} fill={getColor(entry.winRate)} />
-          ))}
-        </Bar>
-        <Legend />
+          name="Win Rate (%)"
+        />
       </BarChart>
     </ChartContainer>
   )
