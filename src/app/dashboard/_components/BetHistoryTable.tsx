@@ -138,9 +138,8 @@ export function BetHistoryTable({
               const isExpanded = expandedParlays[bet.id] || false
               
               return (
-                <>
+                <React.Fragment key={bet.id}>
                   <tr 
-                    key={bet.id} 
                     className={`border-b hover:bg-muted/50 ${isParlay ? 'cursor-pointer' : ''}`}
                     onClick={isParlay ? () => toggleParlay(bet.id) : undefined}
                   >
@@ -168,8 +167,10 @@ export function BetHistoryTable({
                     <td className="px-4 py-3 hidden md:table-cell">
                       <TooltipProvider>
                         <Tooltip>
-                          <TooltipTrigger className="max-w-48 truncate block text-left">
-                            {bet.match || "-"}
+                          <TooltipTrigger asChild>
+                            <span className="max-w-48 truncate block text-left">
+                              {bet.match || "-"}
+                            </span>
                           </TooltipTrigger>
                           <TooltipContent>
                             <p className="max-w-80">{bet.match || "-"}</p>
@@ -180,8 +181,10 @@ export function BetHistoryTable({
                     <td className="px-4 py-3 hidden lg:table-cell">
                       <TooltipProvider>
                         <Tooltip>
-                          <TooltipTrigger className="max-w-40 truncate block text-left">
-                            {bet.selection || "-"}
+                          <TooltipTrigger asChild>
+                            <span className="max-w-40 truncate block text-left">
+                              {bet.selection || "-"}
+                            </span>
                           </TooltipTrigger>
                           <TooltipContent>
                             <p className="max-w-80">{bet.selection || "-"}</p>
@@ -234,8 +237,10 @@ export function BetHistoryTable({
                         <td className="px-4 py-2 text-sm hidden md:table-cell">
                           <TooltipProvider>
                             <Tooltip>
-                              <TooltipTrigger className="max-w-48 truncate block text-left">
-                                {leg.match || "-"}
+                              <TooltipTrigger asChild>
+                                <span className="max-w-48 truncate block text-left">
+                                  {leg.match || "-"}
+                                </span>
                               </TooltipTrigger>
                               <TooltipContent>
                                 <p className="max-w-80">{leg.match || "-"}</p>
@@ -246,8 +251,10 @@ export function BetHistoryTable({
                         <td className="px-4 py-2 text-sm hidden lg:table-cell">
                           <TooltipProvider>
                             <Tooltip>
-                              <TooltipTrigger className="max-w-40 truncate block text-left">
-                                {`${leg.market || ""} ${leg.selection || ""}`}
+                              <TooltipTrigger asChild>
+                                <span className="max-w-40 truncate block text-left">
+                                  {`${leg.market || ""} ${leg.selection || ""}`}
+                                </span>
                               </TooltipTrigger>
                               <TooltipContent>
                                 <p className="max-w-80">{`${leg.market || ""} ${leg.selection || ""}`}</p>
@@ -269,7 +276,7 @@ export function BetHistoryTable({
                       </tr>
                     )
                   })}
-                </>
+                </React.Fragment>
               )
             })}
           </tbody>
