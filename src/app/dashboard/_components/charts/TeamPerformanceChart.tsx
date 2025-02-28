@@ -74,35 +74,23 @@ export function TeamPerformanceChart({
             {team.wins}W - {team.losses}L - {team.pushes}P
           </div>
           
-          <ChartContainer
-            config={chartConfig}
-            className="h-[150px] w-[150px]"
-          >
-            <PieChart>
+          <ChartContainer config={chartConfig} className="h-[150px] w-[150px]">
+            <PieChart width={150} height={150}>
               <Pie
                 data={createPieData(team)}
                 cx="50%"
                 cy="50%"
-                innerRadius={30}
-                outerRadius={60}
-                paddingAngle={1}
-                dataKey="value"
-                nameKey="name"
-                label={({ value }) => `${value}`}
                 labelLine={false}
+                outerRadius={60}
+                innerRadius={40}
+                fill="#8884d8"
+                dataKey="value"
               >
                 {createPieData(team).map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={entry.color} />
                 ))}
               </Pie>
-              <Legend 
-                layout="horizontal"
-                verticalAlign="bottom"
-                align="center"
-                iconSize={8}
-                iconType="circle"
-              />
-              <ChartTooltip />
+              <Tooltip content={<ChartTooltipContent />} />
             </PieChart>
           </ChartContainer>
         </div>
