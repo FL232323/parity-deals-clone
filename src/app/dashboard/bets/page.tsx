@@ -22,6 +22,60 @@ export default async function BetHistoryPage({
   const offset = (page - 1) * pageSize
   
   try {
+    // Get total count for pagination first to check if there's any data
+    const singleBetsCount = await db
+      .select({ count: db.fn.count() })
+      .from(SingleBetsTable)
+      .where(eq(SingleBetsTable.userId, userId))
+    
+    const parlayBetsCount = await db
+      .select({ count: db.fn.count() })
+      .from(ParlayHeadersTable)
+      .where(eq(ParlayHeadersTable.userId, userId))
+    
+    // Get summary statistics
+    const totalBets = Number(singleBetsCount[0]?.count || 0) + Number(parlayBetsCount[0]?.count || 0)
+    const totalPages = Math.ceil(totalBets / pageSize) || 1  // Ensure at least 1 page
+    
+    // Early return if no data
+    if (totalBets === 0) {
+      return (
+        <>
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-3xl font-semibold">Betting History</h1>
+            <div className="flex gap-3">
+              <Button variant="outline" asChild>
+                <Link href="/dashboard/analytics">
+                  <BarChart2Icon className="size-4 mr-2" />
+                  Analytics
+                </Link>
+              </Button>
+              <ClearDataButton />
+              <Button asChild>
+                <Link href="/dashboard/upload">
+                  <UploadIcon className="size-4 mr-2" />
+                  Upload Data
+                </Link>
+              </Button>
+            </div>
+          </div>
+          
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <h2 className="text-2xl font-semibold mb-2">No betting data found</h2>
+            <p className="mb-6 text-muted-foreground">
+              Upload your betting data to see your betting history and analytics.
+            </p>
+            <Button asChild>
+              <Link href="/dashboard/upload">
+                <UploadIcon className="size-4 mr-2" />
+                Upload Betting Data
+              </Link>
+            </Button>
+          </div>
+        </>
+      )
+    }
+    
     // Get single bets
     const singleBets = await db
       .select({
@@ -64,39 +118,42 @@ export default async function BetHistoryPage({
       .limit(pageSize)
       .offset(offset)
     
-    // Get all parlay IDs from the current page
-    const parlayIds = parlayBets.map(bet => bet.id)
+    // Safe handling of parlay legs - only proceed if we have parlays
+    let legsMap: Record<string, any[]> = {}
     
-    // Get parlay legs for all parlays on this page
-    const parlayLegs = await db
-      .select({
-        id: ParlayLegsTable.id,
-        parlayId: ParlayLegsTable.parlayId,
-        legNumber: ParlayLegsTable.legNumber,
-        status: ParlayLegsTable.status,
-        league: ParlayLegsTable.league,
-        match: ParlayLegsTable.match,
-        market: ParlayLegsTable.market,
-        selection: ParlayLegsTable.selection,
-        price: ParlayLegsTable.price,
-        gameDate: ParlayLegsTable.gameDate,
-      })
-      .from(ParlayLegsTable)
-      .where(
-        parlayIds.length > 0 
-          ? sql`${ParlayLegsTable.parlayId} IN (${parlayIds.join(',')})` 
-          : sql`FALSE`
-      )
-      .orderBy(ParlayLegsTable.legNumber)
-    
-    // Group legs by parlay ID
-    const legsMap: Record<string, typeof parlayLegs> = {}
-    parlayLegs.forEach(leg => {
-      if (!legsMap[leg.parlayId]) {
-        legsMap[leg.parlayId] = []
+    if (parlayBets.length > 0) {
+      // Get all parlay IDs from the current page
+      const parlayIds = parlayBets.map(bet => bet.id).filter(Boolean)
+      
+      if (parlayIds.length > 0) {
+        // Get parlay legs for all parlays on this page
+        const parlayLegs = await db
+          .select({
+            id: ParlayLegsTable.id,
+            parlayId: ParlayLegsTable.parlayId,
+            legNumber: ParlayLegsTable.legNumber,
+            status: ParlayLegsTable.status,
+            league: ParlayLegsTable.league,
+            match: ParlayLegsTable.match,
+            market: ParlayLegsTable.market,
+            selection: ParlayLegsTable.selection,
+            price: ParlayLegsTable.price,
+            gameDate: ParlayLegsTable.gameDate,
+          })
+          .from(ParlayLegsTable)
+          .where(sql`${ParlayLegsTable.parlayId} IN (${parlayIds.join(',')})`)
+          .orderBy(ParlayLegsTable.legNumber)
+        
+        // Group legs by parlay ID
+        legsMap = parlayLegs.reduce((acc, leg) => {
+          if (!acc[leg.parlayId]) {
+            acc[leg.parlayId] = []
+          }
+          acc[leg.parlayId].push(leg)
+          return acc
+        }, {} as Record<string, any[]>)
       }
-      legsMap[leg.parlayId].push(leg)
-    })
+    }
     
     // Combine and sort by date
     const bets = [...singleBets, ...parlayBets]
@@ -106,25 +163,10 @@ export default async function BetHistoryPage({
       })
       .slice(0, pageSize)
     
-    // Get total count for pagination
-    const singleBetsCount = await db
-      .select({ count: db.fn.count() })
-      .from(SingleBetsTable)
-      .where(eq(SingleBetsTable.userId, userId))
-    
-    const parlayBetsCount = await db
-      .select({ count: db.fn.count() })
-      .from(ParlayHeadersTable)
-      .where(eq(ParlayHeadersTable.userId, userId))
-    
-    // Get summary statistics
-    const totalBets = Number(singleBetsCount[0]?.count || 0) + Number(parlayBetsCount[0]?.count || 0)
-    const totalPages = Math.ceil(totalBets / pageSize)
-    
-    // Get betting summary
+    // Get betting summary for display
     const allBets = await db
       .select({
-        profit: sql`SUM(${SingleBetsTable.winnings})`.mapWith(Number),
+        profit: sql`COALESCE(SUM(${SingleBetsTable.winnings}), 0)`.mapWith(Number),
         count: sql`COUNT(*)`.mapWith(Number)
       })
       .from(SingleBetsTable)
@@ -132,13 +174,13 @@ export default async function BetHistoryPage({
     
     const allParlays = await db
       .select({
-        profit: sql`SUM(${ParlayHeadersTable.winnings})`.mapWith(Number),
+        profit: sql`COALESCE(SUM(${ParlayHeadersTable.winnings}), 0)`.mapWith(Number),
         count: sql`COUNT(*)`.mapWith(Number)
       })
       .from(ParlayHeadersTable)
       .where(eq(ParlayHeadersTable.userId, userId))
     
-    const totalProfit = (allBets[0].profit || 0) + (allParlays[0].profit || 0)
+    const totalProfit = (allBets[0]?.profit || 0) + (allParlays[0]?.profit || 0)
     const profitLossText = totalProfit >= 0 
       ? `$${totalProfit.toFixed(2)} profit` 
       : `$${Math.abs(totalProfit).toFixed(2)} loss`
@@ -164,52 +206,35 @@ export default async function BetHistoryPage({
           </div>
         </div>
         
-        {bets && bets.length > 0 ? (
-          <>
-            {/* Summary Card */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <Card className="p-4">
-                <h3 className="text-sm font-medium text-muted-foreground mb-1">Total Bets</h3>
-                <div className="text-2xl font-bold">{totalBets}</div>
-              </Card>
-              <Card className="p-4">
-                <h3 className="text-sm font-medium text-muted-foreground mb-1">Total Profit/Loss</h3>
-                <div className={`text-2xl font-bold ${totalProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {profitLossText}
-                </div>
-              </Card>
-              <Card className="p-4">
-                <h3 className="text-sm font-medium text-muted-foreground mb-1">Bet Types</h3>
-                <div className="text-2xl font-bold">
-                  {allBets[0].count} Singles / {allParlays[0].count} Parlays
-                </div>
-              </Card>
+        {/* Summary Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <Card className="p-4">
+            <h3 className="text-sm font-medium text-muted-foreground mb-1">Total Bets</h3>
+            <div className="text-2xl font-bold">{totalBets}</div>
+          </Card>
+          <Card className="p-4">
+            <h3 className="text-sm font-medium text-muted-foreground mb-1">Total Profit/Loss</h3>
+            <div className={`text-2xl font-bold ${totalProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              {profitLossText}
             </div>
-            
-            {/* Bet History Table */}
-            <Card>
-              <BetHistoryTable 
-                bets={bets} 
-                parlayLegs={legsMap} 
-                currentPage={page} 
-                totalPages={totalPages} 
-              />
-            </Card>
-          </>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <h2 className="text-2xl font-semibold mb-2">No betting data found</h2>
-            <p className="mb-6 text-muted-foreground">
-              Upload your betting data to see your betting history and analytics.
-            </p>
-            <Button asChild>
-              <Link href="/dashboard/upload">
-                <UploadIcon className="size-4 mr-2" />
-                Upload Betting Data
-              </Link>
-            </Button>
-          </div>
-        )}
+          </Card>
+          <Card className="p-4">
+            <h3 className="text-sm font-medium text-muted-foreground mb-1">Bet Types</h3>
+            <div className="text-2xl font-bold">
+              {allBets[0]?.count || 0} Singles / {allParlays[0]?.count || 0} Parlays
+            </div>
+          </Card>
+        </div>
+        
+        {/* Bet History Table */}
+        <Card>
+          <BetHistoryTable 
+            bets={bets} 
+            parlayLegs={legsMap} 
+            currentPage={page} 
+            totalPages={totalPages} 
+          />
+        </Card>
       </>
     )
   } catch (error) {
