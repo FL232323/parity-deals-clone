@@ -177,7 +177,7 @@ async function getBettingDataByDayInternal({
       .groupBy(({ date }) => [date])
   )
   
-  // Get all dates from interval for complete chart
+  // Get all dates from interval for complete chart - Added explicit alias for 'date' field
   const allDatesQuery = db.$with("all_dates").as(
     db.select({
       date: interval.dateGrouper(sql.raw("series"))
@@ -187,21 +187,27 @@ async function getBettingDataByDayInternal({
     .from(interval.sql)
   )
   
-  // Combine data with left joins
-  const result = await db
-    .with(allDatesQuery, singleBetsQuery, parlaysQuery)
-    .select({
-      date: allDatesQuery.date,
-      singleBets: sql`COALESCE(${singleBetsQuery.count}, 0)`.mapWith(Number),
-      parlayBets: sql`COALESCE(${parlaysQuery.count}, 0)`.mapWith(Number),
-      profit: sql`COALESCE(${singleBetsQuery.profit}, 0) + COALESCE(${parlaysQuery.profit}, 0)`.mapWith(Number)
-    })
-    .from(allDatesQuery)
-    .leftJoin(singleBetsQuery, eq(allDatesQuery.date, singleBetsQuery.date))
-    .leftJoin(parlaysQuery, eq(allDatesQuery.date, parlaysQuery.date))
-    .orderBy(allDatesQuery.date)
-  
-  return result
+  try {
+    // Combine data with left joins
+    const result = await db
+      .with(allDatesQuery, singleBetsQuery, parlaysQuery)
+      .select({
+        date: allDatesQuery.date,
+        singleBets: sql`COALESCE(${singleBetsQuery.count}, 0)`.mapWith(Number),
+        parlayBets: sql`COALESCE(${parlaysQuery.count}, 0)`.mapWith(Number),
+        profit: sql`COALESCE(${singleBetsQuery.profit}, 0) + COALESCE(${parlaysQuery.profit}, 0)`.mapWith(Number)
+      })
+      .from(allDatesQuery)
+      .leftJoin(singleBetsQuery, eq(allDatesQuery.date, singleBetsQuery.date))
+      .leftJoin(parlaysQuery, eq(allDatesQuery.date, parlaysQuery.date))
+      .orderBy(allDatesQuery.date)
+    
+    return result
+  } catch (error) {
+    console.error("Error getting betting data by day:", error);
+    // Return empty array with proper structure on error
+    return [];
+  }
 }
 
 async function getBettingDataByLeagueInternal({
@@ -215,93 +221,98 @@ async function getBettingDataByLeagueInternal({
 }) {
   const startDate = startOfDay(interval.startDate, { in: tz(timezone) })
   
-  // Query for single bets by league
-  const singleBetsQuery = db
-    .select({
-      league: SingleBetsTable.league,
-      count: count(),
-      profit: sum(SingleBetsTable.winnings).mapWith(Number)
-    })
-    .from(SingleBetsTable)
-    .where(
-      and(
-        eq(SingleBetsTable.userId, userId),
-        gte(
-          sql`${SingleBetsTable.datePlaced} AT TIME ZONE ${timezone}`.inlineParams(),
-          startDate
-        )
-      )
-    )
-    .groupBy(({ league }) => [league])
-  
-  // Query for parlay bets by league
-  const parlayLegsQuery = db
-    .select({
-      league: ParlayLegsTable.league,
-      count: count()
-    })
-    .from(ParlayLegsTable)
-    .innerJoin(
-      ParlayHeadersTable, 
-      eq(ParlayLegsTable.parlayId, ParlayHeadersTable.id)
-    )
-    .where(
-      and(
-        eq(ParlayHeadersTable.userId, userId),
-        gte(
-          sql`${ParlayHeadersTable.datePlaced} AT TIME ZONE ${timezone}`.inlineParams(), 
-          startDate
-        )
-      )
-    )
-    .groupBy(({ league }) => [league])
-  
-  // Execute the queries
-  const [singleBetsByLeague, parlayLegsByLeague] = await Promise.all([
-    singleBetsQuery,
-    parlayLegsQuery
-  ])
-  
-  // Combine the data
-  const leagueMap = new Map<string, { league: string, bets: number, parlayLegs: number, profit: number }>()
-  
-  // Add single bet data
-  singleBetsByLeague.forEach(item => {
-    if (item.league) {
-      leagueMap.set(item.league, {
-        league: item.league,
-        bets: Number(item.count || 0),
-        parlayLegs: 0,
-        profit: Number(item.profit || 0)
+  try {
+    // Query for single bets by league
+    const singleBetsQuery = db
+      .select({
+        league: SingleBetsTable.league,
+        count: count(),
+        profit: sum(SingleBetsTable.winnings).mapWith(Number)
       })
-    }
-  })
-  
-  // Add parlay leg data
-  parlayLegsByLeague.forEach(item => {
-    if (item.league) {
-      const existing = leagueMap.get(item.league)
-      if (existing) {
-        existing.parlayLegs = Number(item.count || 0)
-      } else {
+      .from(SingleBetsTable)
+      .where(
+        and(
+          eq(SingleBetsTable.userId, userId),
+          gte(
+            sql`${SingleBetsTable.datePlaced} AT TIME ZONE ${timezone}`.inlineParams(),
+            startDate
+          )
+        )
+      )
+      .groupBy(({ league }) => [league])
+    
+    // Query for parlay bets by league
+    const parlayLegsQuery = db
+      .select({
+        league: ParlayLegsTable.league,
+        count: count()
+      })
+      .from(ParlayLegsTable)
+      .innerJoin(
+        ParlayHeadersTable, 
+        eq(ParlayLegsTable.parlayId, ParlayHeadersTable.id)
+      )
+      .where(
+        and(
+          eq(ParlayHeadersTable.userId, userId),
+          gte(
+            sql`${ParlayHeadersTable.datePlaced} AT TIME ZONE ${timezone}`.inlineParams(), 
+            startDate
+          )
+        )
+      )
+      .groupBy(({ league }) => [league])
+    
+    // Execute the queries
+    const [singleBetsByLeague, parlayLegsByLeague] = await Promise.all([
+      singleBetsQuery,
+      parlayLegsQuery
+    ])
+    
+    // Combine the data
+    const leagueMap = new Map<string, { league: string, bets: number, parlayLegs: number, profit: number }>()
+    
+    // Add single bet data
+    singleBetsByLeague.forEach(item => {
+      if (item.league) {
         leagueMap.set(item.league, {
           league: item.league,
-          bets: 0,
-          parlayLegs: Number(item.count || 0),
-          profit: 0
+          bets: Number(item.count || 0),
+          parlayLegs: 0,
+          profit: Number(item.profit || 0)
         })
       }
-    }
-  })
-  
-  // Convert to array and sort by total bets
-  return Array.from(leagueMap.values())
-    .map(item => ({
-      ...item,
-      totalBets: item.bets + item.parlayLegs
-    }))
-    .sort((a, b) => b.totalBets - a.totalBets)
-    .slice(0, 10) // Limit to top 10 leagues
+    })
+    
+    // Add parlay leg data
+    parlayLegsByLeague.forEach(item => {
+      if (item.league) {
+        const existing = leagueMap.get(item.league)
+        if (existing) {
+          existing.parlayLegs = Number(item.count || 0)
+        } else {
+          leagueMap.set(item.league, {
+            league: item.league,
+            bets: 0,
+            parlayLegs: Number(item.count || 0),
+            profit: 0
+          })
+        }
+      }
+    })
+    
+    // Convert to array and sort by total bets
+    return Array.from(leagueMap.values())
+      .map(item => ({
+        ...item,
+        totalBets: item.bets + item.parlayLegs
+      }))
+      .sort((a, b) => b.totalBets - a.totalBets)
+      .slice(0, 10) // Limit to top 10 leagues
+  } catch (error) {
+    console.error("Error getting betting data by league:", error);
+    return [];
+  }
 }
 
 async function getWinRateByBetTypeInternal({
@@ -315,70 +326,78 @@ async function getWinRateByBetTypeInternal({
 }) {
   const startDate = startOfDay(interval.startDate, { in: tz(timezone) })
   
-  // Query for single bet results
-  const singleBetsQuery = db
-    .select({
-      type: sql`'Single'`.as('type'),
-      total: count(),
-      wins: sql`SUM(CASE WHEN ${SingleBetsTable.result} ILIKE '%won%' OR ${SingleBetsTable.result} ILIKE '%win%' THEN 1 ELSE 0 END)`.mapWith(Number),
-      profit: sum(SingleBetsTable.winnings).mapWith(Number)
-    })
-    .from(SingleBetsTable)
-    .where(
-      and(
-        eq(SingleBetsTable.userId, userId),
-        gte(
-          sql`${SingleBetsTable.datePlaced} AT TIME ZONE ${timezone}`.inlineParams(),
-          startDate
+  try {
+    // Query for single bet results
+    const singleBetsQuery = db
+      .select({
+        type: sql`'Single'`.as('type'),
+        total: count(),
+        wins: sql`SUM(CASE WHEN ${SingleBetsTable.result} ILIKE '%won%' OR ${SingleBetsTable.result} ILIKE '%win%' THEN 1 ELSE 0 END)`.mapWith(Number),
+        profit: sum(SingleBetsTable.winnings).mapWith(Number)
+      })
+      .from(SingleBetsTable)
+      .where(
+        and(
+          eq(SingleBetsTable.userId, userId),
+          gte(
+            sql`${SingleBetsTable.datePlaced} AT TIME ZONE ${timezone}`.inlineParams(),
+            startDate
+          )
         )
       )
-    )
-  
-  // Query for parlay results
-  const parlayQuery = db
-    .select({
-      type: sql`'Parlay'`.as('type'),
-      total: count(),
-      wins: sql`SUM(CASE WHEN ${ParlayHeadersTable.result} ILIKE '%won%' OR ${ParlayHeadersTable.result} ILIKE '%win%' THEN 1 ELSE 0 END)`.mapWith(Number),
-      profit: sum(ParlayHeadersTable.winnings).mapWith(Number)
-    })
-    .from(ParlayHeadersTable)
-    .where(
-      and(
-        eq(ParlayHeadersTable.userId, userId),
-        gte(
-          sql`${ParlayHeadersTable.datePlaced} AT TIME ZONE ${timezone}`.inlineParams(),
-          startDate
+    
+    // Query for parlay results
+    const parlayQuery = db
+      .select({
+        type: sql`'Parlay'`.as('type'),
+        total: count(),
+        wins: sql`SUM(CASE WHEN ${ParlayHeadersTable.result} ILIKE '%won%' OR ${ParlayHeadersTable.result} ILIKE '%win%' THEN 1 ELSE 0 END)`.mapWith(Number),
+        profit: sum(ParlayHeadersTable.winnings).mapWith(Number)
+      })
+      .from(ParlayHeadersTable)
+      .where(
+        and(
+          eq(ParlayHeadersTable.userId, userId),
+          gte(
+            sql`${ParlayHeadersTable.datePlaced} AT TIME ZONE ${timezone}`.inlineParams(),
+            startDate
+          )
         )
       )
-    )
-  
-  // Execute the queries
-  const [singleResults, parlayResults] = await Promise.all([
-    singleBetsQuery,
-    parlayQuery
-  ])
-  
-  // Prepare the results
-  const singleStats = singleResults[0];
-  const parlayStats = parlayResults[0];
-  
-  return [
-    {
-      type: "Single",
-      total: Number(singleStats?.total || 0),
-      wins: Number(singleStats?.wins || 0),
-      winRate: singleStats?.total ? (Number(singleStats.wins || 0) / Number(singleStats.total)) * 100 : 0,
-      profit: Number(singleStats?.profit || 0)
-    },
-    {
-      type: "Parlay",
-      total: Number(parlayStats?.total || 0),
-      wins: Number(parlayStats?.wins || 0),
-      winRate: parlayStats?.total ? (Number(parlayStats.wins || 0) / Number(parlayStats.total)) * 100 : 0,
-      profit: Number(parlayStats?.profit || 0)
-    }
-  ]
+    
+    // Execute the queries
+    const [singleResults, parlayResults] = await Promise.all([
+      singleBetsQuery,
+      parlayQuery
+    ])
+    
+    // Prepare the results
+    const singleStats = singleResults[0];
+    const parlayStats = parlayResults[0];
+    
+    return [
+      {
+        type: "Single",
+        total: Number(singleStats?.total || 0),
+        wins: Number(singleStats?.wins || 0),
+        winRate: singleStats?.total ? (Number(singleStats.wins || 0) / Number(singleStats.total)) * 100 : 0,
+        profit: Number(singleStats?.profit || 0)
+      },
+      {
+        type: "Parlay",
+        total: Number(parlayStats?.total || 0),
+        wins: Number(parlayStats?.wins || 0),
+        winRate: parlayStats?.total ? (Number(parlayStats.wins || 0) / Number(parlayStats.total)) * 100 : 0,
+        profit: Number(parlayStats?.profit || 0)
+      }
+    ]
+  } catch (error) {
+    console.error("Error getting win rate by bet type:", error);
+    return [
+      { type: "Single", total: 0, wins: 0, winRate: 0, profit: 0 },
+      { type: "Parlay", total: 0, wins: 0, winRate: 0, profit: 0 }
+    ];
+  }
 }
 
 async function getTeamPerformanceDataInternal({
@@ -388,34 +407,39 @@ async function getTeamPerformanceDataInternal({
   userId: string
   limit: number
 }) {
-  // Get team stats from the aggregated stats table
-  const teamStats = await db
-    .select({
-      team: TeamStatsTable.team,
-      totalBets: TeamStatsTable.totalBets,
-      wins: TeamStatsTable.wins,
-      losses: TeamStatsTable.losses,
-      pushes: TeamStatsTable.pushes,
-      pending: TeamStatsTable.pending,
-      league: TeamStatsTable.league
-    })
-    .from(TeamStatsTable)
-    .where(eq(TeamStatsTable.userId, userId))
-    .orderBy(desc(TeamStatsTable.totalBets))
-    .limit(limit)
-  
-  // Calculate win rate and format data for chart
-  return teamStats.map(team => ({
-    team: team.team,
-    wins: team.wins,
-    losses: team.losses,
-    pushes: team.pushes,
-    pending: team.pending,
-    totalBets: team.totalBets,
-    winRate: team.totalBets > 0 ? 
-      ((team.wins / (team.wins + team.losses)) * 100).toFixed(1) : "0",
-    league: team.league
-  }))
+  try {
+    // Get team stats from the aggregated stats table
+    const teamStats = await db
+      .select({
+        team: TeamStatsTable.team,
+        totalBets: TeamStatsTable.totalBets,
+        wins: TeamStatsTable.wins,
+        losses: TeamStatsTable.losses,
+        pushes: TeamStatsTable.pushes,
+        pending: TeamStatsTable.pending,
+        league: TeamStatsTable.league
+      })
+      .from(TeamStatsTable)
+      .where(eq(TeamStatsTable.userId, userId))
+      .orderBy(desc(TeamStatsTable.totalBets))
+      .limit(limit)
+    
+    // Calculate win rate and format data for chart
+    return teamStats.map(team => ({
+      team: team.team,
+      wins: team.wins,
+      losses: team.losses,
+      pushes: team.pushes,
+      pending: team.pending,
+      totalBets: team.totalBets,
+      winRate: team.totalBets > 0 && (team.wins + team.losses) > 0 ? 
+        ((team.wins / (team.wins + team.losses)) * 100).toFixed(1) : "0",
+      league: team.league
+    }))
+  } catch (error) {
+    console.error("Error getting team performance data:", error);
+    return [];
+  }
 }
 
 async function getPropBetPerformanceInternal({
@@ -425,30 +449,35 @@ async function getPropBetPerformanceInternal({
   userId: string
   limit: number
 }) {
-  // Get prop bet stats from the aggregated stats table
-  const propStats = await db
-    .select({
-      propType: PropStatsTable.propType,
-      totalBets: PropStatsTable.totalBets,
-      wins: PropStatsTable.wins,
-      losses: PropStatsTable.losses,
-      pushes: PropStatsTable.pushes,
-      pending: PropStatsTable.pending
-    })
-    .from(PropStatsTable)
-    .where(eq(PropStatsTable.userId, userId))
-    .orderBy(desc(PropStatsTable.totalBets))
-    .limit(limit)
-  
-  // Calculate win rate and format data for chart
-  return propStats.map(prop => ({
-    propType: prop.propType,
-    wins: prop.wins,
-    losses: prop.losses,
-    pushes: prop.pushes,
-    pending: prop.pending,
-    totalBets: prop.totalBets,
-    winRate: prop.totalBets > 0 ? 
-      ((prop.wins / (prop.wins + prop.losses)) * 100).toFixed(1) : "0"
-  }))
+  try {
+    // Get prop bet stats from the aggregated stats table
+    const propStats = await db
+      .select({
+        propType: PropStatsTable.propType,
+        totalBets: PropStatsTable.totalBets,
+        wins: PropStatsTable.wins,
+        losses: PropStatsTable.losses,
+        pushes: PropStatsTable.pushes,
+        pending: PropStatsTable.pending
+      })
+      .from(PropStatsTable)
+      .where(eq(PropStatsTable.userId, userId))
+      .orderBy(desc(PropStatsTable.totalBets))
+      .limit(limit)
+    
+    // Calculate win rate and format data for chart
+    return propStats.map(prop => ({
+      propType: prop.propType,
+      wins: prop.wins,
+      losses: prop.losses,
+      pushes: prop.pushes,
+      pending: prop.pending,
+      totalBets: prop.totalBets,
+      winRate: prop.totalBets > 0 && (prop.wins + prop.losses) > 0 ? 
+        ((prop.wins / (prop.wins + prop.losses)) * 100).toFixed(1) : "0"
+    }))
+  } catch (error) {
+    console.error("Error getting prop bet performance data:", error);
+    return [];
+  }
 }
