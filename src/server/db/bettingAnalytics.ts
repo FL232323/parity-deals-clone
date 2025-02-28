@@ -137,7 +137,7 @@ async function getBettingDataByDayInternal({
       .select({
         date: interval.dateGrouper(
           sql`${SingleBetsTable.datePlaced} AT TIME ZONE ${timezone}`.inlineParams()
-        ).mapWith(String),
+        ).mapWith(String).as("date"),
         count: count(),
         profit: sum(SingleBetsTable.winnings).mapWith(Number)
       })
@@ -160,7 +160,7 @@ async function getBettingDataByDayInternal({
       .select({
         date: interval.dateGrouper(
           sql`${ParlayHeadersTable.datePlaced} AT TIME ZONE ${timezone}`.inlineParams()
-        ).mapWith(String),
+        ).mapWith(String).as("date"),
         count: count(),
         profit: sum(ParlayHeadersTable.winnings).mapWith(Number)
       })
@@ -180,9 +180,9 @@ async function getBettingDataByDayInternal({
   // Get all dates from interval for complete chart
   const allDatesQuery = db.$with("all_dates").as(
     db.select({
-      date: interval.dateGrouper(sql.raw("series")).mapWith(dateString => 
-        interval.dateFormatter(new Date(dateString))
-      )
+      date: interval.dateGrouper(sql.raw("series"))
+        .mapWith(dateString => interval.dateFormatter(new Date(dateString)))
+        .as("date")
     })
     .from(interval.sql)
   )
