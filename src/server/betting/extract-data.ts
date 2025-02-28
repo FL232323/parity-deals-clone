@@ -14,6 +14,9 @@ export function extractBettingData(data: string[], userId: string) {
   
   let currentPosition = 0
   
+  // Log the first 10 items of data for debugging
+  console.log("First 10 items of preprocessed data:", data.slice(0, 10))
+  
   /**
    * Extract teams from match string
    */
@@ -47,175 +50,135 @@ export function extractBettingData(data: string[], userId: string) {
    */
   function countLegs(matchStr?: string): number {
     if (!matchStr) return 0
-    return (matchStr.match(/,/g) || []).length + 1
+    
+    // Count commas and add 1 (assuming format is "Team A vs Team B, Team C vs Team D, ...")
+    const commaCount = (matchStr.match(/,/g) || []).length
+    
+    // If we have no commas but have a match, there's at least 1 leg
+    if (commaCount === 0 && matchStr.trim() !== '') {
+      return 1
+    }
+    
+    // In the observed format, each match has a comma after it (including the last one sometimes)
+    // This pattern suggests each comma represents one match/leg
+    return commaCount
   }
 
-  // Parse through the data to find bets
+  // Enhanced parsing logic for Hard Rock Bet export format
   while (currentPosition < data.length) {
-    const currValue = data[currentPosition]
-    
     // Skip empty values
-    if (!currValue || currValue.trim() === '') {
+    if (!data[currentPosition] || data[currentPosition].trim() === '') {
       currentPosition++
       continue
     }
     
+    // Detect if this is a new bet by checking for date pattern
+    // Only parlay headers and single bets start with a date
+    const currValue = data[currentPosition]
+    
     if (isDate(currValue)) {
-      console.log("Found potential bet start at position", currentPosition, "value:", currValue)
+      // Log the potential bet start for debugging
+      console.log(`Found potential bet start at position ${currentPosition}: ${currValue}`)
       
-      // Make sure we have enough data for a complete bet entry (minimum 12 fields)
+      // Make sure we have at least 12 more items for a complete bet (13 total columns)
       if (currentPosition + 12 >= data.length) {
+        console.log("Not enough data remaining for a complete bet, skipping")
         currentPosition++
         continue
       }
       
-      // This could be the start of a bet - grab the next 13 fields
-      const betInfo = []
-      let i = 0
-      let skip = false
-      
-      // Collect bet information, possibly skipping empty values
-      while (betInfo.length < 13 && currentPosition + i < data.length) {
-        const val = data[currentPosition + i]
-        
-        // Skip repeated date fields that might appear
-        if (betInfo.length > 0 && isDate(val) && isDate(betInfo[0])) {
-          skip = true
-          break
-        }
-        
-        betInfo.push(val)
-        i++
+      // Collect the next 13 values as a bet (exactly matching the column count)
+      const betFields = []
+      for (let i = 0; i < 13 && currentPosition + i < data.length; i++) {
+        betFields.push(data[currentPosition + i])
       }
       
-      // If we need to skip, continue to next value
-      if (skip) {
-        currentPosition++
-        continue
-      }
+      // Move position past this bet
+      currentPosition += 13
       
-      currentPosition += i
-      
-      // Check if this is a parlay by looking for "MULTIPLE" in the bet type field (usually 4th field)
-      const betTypeIdx = Math.min(4, betInfo.length - 1)
-      const isBetMultiple = betInfo.some(item => 
-        item && typeof item === 'string' && item.includes("MULTIPLE")
-      )
+      // Check if this is a parlay by looking for MULTIPLE in the bet type
+      const isBetMultiple = betFields[4] === "MULTIPLE"
       
       if (isBetMultiple) {
         console.log("Parsing a parlay bet")
         
-        // This is a parlay
-        let betId: string | undefined
-        
-        // Try to find the bet ID - it's either the next value after the bet info
-        // or potentially the last value in bet info if it's a 19-digit number
-        if (currentPosition < data.length && isBetId(data[currentPosition])) {
-          betId = data[currentPosition]
-          currentPosition++
-        } else {
-          // Look for a bet ID in the bet info
-          for (let j = betInfo.length - 1; j >= 0; j--) {
-            if (isBetId(betInfo[j])) {
-              betId = betInfo[j]
-              break
-            }
-          }
-          
-          // If we still don't have a bet ID, generate one
-          if (!betId) {
-            betId = `${Date.now()}${Math.floor(Math.random() * 1000)}`.padEnd(19, '0')
-            console.log("Generated a bet ID:", betId)
-          }
-        }
-        
-        console.log("Parlay bet ID:", betId)
-        
         // Create the parlay header
+        const betId = betFields[12]
         const parlayHeader = {
           userId,
-          datePlaced: parseDate(betInfo[0]),
-          status: betInfo[1],
-          league: betInfo[2],
-          match: betInfo[3],
-          betType: betInfo[4],
-          market: betInfo[5],
-          selection: betInfo[6],
-          price: betInfo[7] ? parseFloat(betInfo[7]) : undefined,
-          wager: betInfo[8] ? parseFloat(betInfo[8]) : undefined,
-          winnings: betInfo[9] ? parseFloat(betInfo[9]) : undefined,
-          payout: betInfo[10] ? parseFloat(betInfo[10]) : undefined,
-          potentialPayout: betInfo[11] ? parseFloat(betInfo[11]) : undefined,
-          result: betInfo[12],
+          datePlaced: parseDate(betFields[0]),
+          status: betFields[1],
+          league: betFields[2],
+          match: betFields[3],
+          betType: betFields[4],
+          market: betFields[5],
+          price: betFields[6] ? parseFloat(betFields[6]) : undefined,
+          wager: betFields[7] ? parseFloat(betFields[7]) : undefined,
+          winnings: betFields[8] ? parseFloat(betFields[8]) : undefined,
+          payout: betFields[9] ? parseFloat(betFields[9]) : undefined,
+          potentialPayout: betFields[10] ? parseFloat(betFields[10]) : undefined,
+          result: betFields[11],
           betSlipId: betId
         }
+        
+        console.log("Created parlay header:", { 
+          id: betId, 
+          match: parlayHeader.match,
+          wager: parlayHeader.wager,
+          potentialPayout: parlayHeader.potentialPayout
+        })
         
         parlayHeaders.push(parlayHeader)
         
         // Count the number of legs based on commas in the match field
         const numLegs = countLegs(parlayHeader.match)
-        console.log(`Parlay has ${numLegs} legs based on match field:`, parlayHeader.match)
+        console.log(`Parlay has ${numLegs} legs based on match field`)
         
-        // Process parlay legs
-        let legNum = 1
+        // Process all legs for this parlay
         let legsProcessed = 0
         
-        while (legNum <= numLegs && currentPosition + 6 < data.length && legsProcessed < numLegs) {
+        while (legsProcessed < numLegs && currentPosition + 6 < data.length) {
           // Skip empty values
           if (!data[currentPosition] || data[currentPosition].trim() === '') {
             currentPosition++
             continue
           }
           
-          // If we hit another date, we're likely at the next bet, so break
-          if (isDate(data[currentPosition])) {
-            console.log("Hit next date while processing legs, breaking")
+          // If we hit another date that's not a game date (has @ symbol), we're likely at the next bet
+          if (isDate(data[currentPosition]) && data[currentPosition].includes('@')) {
+            console.log("Hit next bet date while processing legs, breaking")
             break
           }
           
-          // Try to capture leg data - should be 7 fields
-          const legData = []
-          let j = 0
-          
-          while (legData.length < 7 && currentPosition + j < data.length) {
-            const val = data[currentPosition + j]
-            
-            // Skip empty values
-            if (!val || val.trim() === '') {
-              j++
-              continue
-            }
-            
-            // If we hit a date, we might be at the next bet
-            if (legData.length > 0 && isDate(val)) {
-              break
-            }
-            
-            legData.push(val)
-            j++
+          // The structure of a leg should be:
+          // Status, League, Match, Market, Selection, Price, GameDate
+          const legFields = []
+          for (let i = 0; i < 7 && currentPosition + i < data.length; i++) {
+            legFields.push(data[currentPosition + i])
           }
           
-          // Move position forward
-          currentPosition += j
+          // Move position past this leg
+          currentPosition += 7
           
-          // Check if we have enough data for a leg
-          if (legData.length < 5) {
-            console.log("Not enough data for leg, skipping")
+          // Make sure we have enough data for a valid leg
+          if (legFields.length < 7 || !legFields[0] || legFields[0].trim() === '') {
+            console.log("Invalid leg data, skipping:", legFields)
             continue
           }
           
-          console.log(`Processing leg ${legNum}`, legData)
+          const legNumber = legsProcessed + 1
+          console.log(`Processing leg ${legNumber}:`, legFields.slice(0, 3))
           
           const parlayLeg = {
-            parlayId: betId || "",
-            legNumber: legNum,
-            status: legData[0],
-            league: legData[1],
-            match: legData[2],
-            market: legData[3],
-            selection: legData[4],
-            price: legData[5] ? parseFloat(legData[5]) : undefined,
-            gameDate: legData[6] ? parseDate(legData[6]) : null
+            parlayId: betId,
+            legNumber: legNumber,
+            status: legFields[0],
+            league: legFields[1],
+            match: legFields[2],
+            market: legFields[3],
+            selection: legFields[4],
+            price: legFields[5] ? parseFloat(legFields[5]) : undefined,
+            gameDate: legFields[6] ? parseDate(legFields[6]) : null
           }
           
           parlayLegs.push(parlayLeg)
@@ -241,11 +204,12 @@ export function extractBettingData(data: string[], userId: string) {
             const stat = teamStatsMap.get(team)!
             stat.totalBets++
             
-            if (parlayLeg.status === 'Won' || parlayLeg.status === 'Win') {
+            const status = parlayLeg.status.toLowerCase()
+            if (status.includes('win')) {
               stat.wins++
-            } else if (parlayLeg.status === 'Lost' || parlayLeg.status === 'Lose') {
+            } else if (status.includes('lose') || status.includes('lost')) {
               stat.losses++
-            } else if (parlayLeg.status === 'Push') {
+            } else if (status.includes('push')) {
               stat.pushes++
             } else {
               stat.pending++
@@ -275,11 +239,12 @@ export function extractBettingData(data: string[], userId: string) {
               stat.propTypes = [...(stat.propTypes || []), propType]
             }
             
-            if (parlayLeg.status === 'Won' || parlayLeg.status === 'Win') {
+            const status = parlayLeg.status.toLowerCase()
+            if (status.includes('win')) {
               stat.wins++
-            } else if (parlayLeg.status === 'Lost' || parlayLeg.status === 'Lose') {
+            } else if (status.includes('lose') || status.includes('lost')) {
               stat.losses++
-            } else if (parlayLeg.status === 'Push') {
+            } else if (status.includes('push')) {
               stat.pushes++
             } else {
               stat.pending++
@@ -302,64 +267,48 @@ export function extractBettingData(data: string[], userId: string) {
             const stat = propStatsMap.get(propType)!
             stat.totalBets++
             
-            if (parlayLeg.status === 'Won' || parlayLeg.status === 'Win') {
+            const status = parlayLeg.status.toLowerCase()
+            if (status.includes('win')) {
               stat.wins++
-            } else if (parlayLeg.status === 'Lost' || parlayLeg.status === 'Lose') {
+            } else if (status.includes('lose') || status.includes('lost')) {
               stat.losses++
-            } else if (parlayLeg.status === 'Push') {
+            } else if (status.includes('push')) {
               stat.pushes++
             } else {
               stat.pending++
             }
           }
           
-          legNum++
           legsProcessed++
         }
       } else {
         console.log("Parsing a single bet")
         
         // This is a single bet
-        let betId: string | undefined
-        
-        // Try to find the bet ID - check for 19-digit number in bet info or next value
-        if (currentPosition < data.length && isBetId(data[currentPosition])) {
-          betId = data[currentPosition]
-          currentPosition++
-        } else {
-          // Look for bet ID in the bet info
-          for (let j = betInfo.length - 1; j >= 0; j--) {
-            if (isBetId(betInfo[j])) {
-              betId = betInfo[j]
-              break
-            }
-          }
-          
-          // If no bet ID found, generate one
-          if (!betId) {
-            betId = `${Date.now()}${Math.floor(Math.random() * 1000)}`.padEnd(19, '0')
-            console.log("Generated single bet ID:", betId)
-          }
-        }
-        
-        console.log("Single bet ID:", betId)
+        const betId = betFields[12]
         
         const singleBet = {
           userId,
-          datePlaced: parseDate(betInfo[0]),
-          status: betInfo[1],
-          league: betInfo[2],
-          match: betInfo[3],
-          betType: betInfo[4],
-          market: betInfo[5],
-          selection: betInfo[6],
-          price: betInfo[7] ? parseFloat(betInfo[7]) : undefined,
-          wager: betInfo[8] ? parseFloat(betInfo[8]) : undefined,
-          winnings: betInfo[9] ? parseFloat(betInfo[9]) : undefined,
-          payout: betInfo[10] ? parseFloat(betInfo[10]) : undefined,
-          result: betInfo[12],
+          datePlaced: parseDate(betFields[0]),
+          status: betFields[1],
+          league: betFields[2],
+          match: betFields[3],
+          betType: betFields[4],
+          market: betFields[5],
+          price: betFields[6] ? parseFloat(betFields[6]) : undefined,
+          wager: betFields[7] ? parseFloat(betFields[7]) : undefined,
+          winnings: betFields[8] ? parseFloat(betFields[8]) : undefined,
+          payout: betFields[9] ? parseFloat(betFields[9]) : undefined,
+          result: betFields[11],
           betSlipId: betId
         }
+        
+        console.log("Created single bet:", { 
+          id: betId, 
+          match: singleBet.match,
+          wager: singleBet.wager,
+          winnings: singleBet.winnings
+        })
         
         singleBets.push(singleBet)
         
@@ -384,11 +333,12 @@ export function extractBettingData(data: string[], userId: string) {
           const stat = teamStatsMap.get(team)!
           stat.totalBets++
           
-          if (singleBet.result === 'Won' || singleBet.result === 'Win') {
+          const result = singleBet.result.toLowerCase()
+          if (result.includes('won') || result.includes('win')) {
             stat.wins++
-          } else if (singleBet.result === 'Lost' || singleBet.result === 'Lose') {
+          } else if (result.includes('lost') || result.includes('lose')) {
             stat.losses++
-          } else if (singleBet.result === 'Push') {
+          } else if (result.includes('push')) {
             stat.pushes++
           } else {
             stat.pending++
@@ -418,11 +368,12 @@ export function extractBettingData(data: string[], userId: string) {
             stat.propTypes = [...(stat.propTypes || []), propType]
           }
           
-          if (singleBet.result === 'Won' || singleBet.result === 'Win') {
+          const result = singleBet.result.toLowerCase()
+          if (result.includes('won') || result.includes('win')) {
             stat.wins++
-          } else if (singleBet.result === 'Lost' || singleBet.result === 'Lose') {
+          } else if (result.includes('lost') || result.includes('lose')) {
             stat.losses++
-          } else if (singleBet.result === 'Push') {
+          } else if (result.includes('push')) {
             stat.pushes++
           } else {
             stat.pending++
@@ -445,11 +396,12 @@ export function extractBettingData(data: string[], userId: string) {
           const stat = propStatsMap.get(propType)!
           stat.totalBets++
           
-          if (singleBet.result === 'Won' || singleBet.result === 'Win') {
+          const result = singleBet.result.toLowerCase()
+          if (result.includes('won') || result.includes('win')) {
             stat.wins++
-          } else if (singleBet.result === 'Lost' || singleBet.result === 'Lose') {
+          } else if (result.includes('lost') || result.includes('lose')) {
             stat.losses++
-          } else if (singleBet.result === 'Push') {
+          } else if (result.includes('push')) {
             stat.pushes++
           } else {
             stat.pending++
@@ -457,6 +409,7 @@ export function extractBettingData(data: string[], userId: string) {
         }
       }
     } else {
+      // Not a date, move to the next value
       currentPosition++
     }
   }
@@ -481,7 +434,7 @@ function isDate(value: string): boolean {
   
   // Common date formats from Hard Rock
   const datePatterns = [
-    /\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+@\s+\d{1,2}:\d{2}(?:am|pm)/i,  // 12 Jan 2023 @ 4:30pm
+    /\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+@\s+\d{1,2}:\d{2}(?:am|pm)/i,  // 9 Feb 2025 @ 4:08pm
     /\d{1,2}\/\d{1,2}\/\d{2,4}\s+\d{1,2}:\d{2}\s*(?:am|pm)?/i,      // 01/12/23 4:30 PM
     /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/                                // 2023-01-12T16:30
   ]
@@ -502,19 +455,26 @@ function isBetId(value: string): boolean {
  */
 function parseDate(dateStr: string): Date | null {
   try {
+    if (!dateStr || typeof dateStr !== 'string') {
+      return null
+    }
+    
     // First try standard date parsing
     let date = new Date(dateStr)
     
     // If that fails, try to manually parse the Hard Rock format
     if (isNaN(date.getTime())) {
-      // Handle D MMM YYYY @ H:MMam/pm format
+      // Handle D MMM YYYY @ H:MMam/pm format (e.g., "9 Feb 2025 @ 4:08pm")
       const match = dateStr.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+@\s+(\d{1,2}):(\d{2})([ap]m)/i)
+      
       if (match) {
         const [_, day, month, year, hour, minute, ampm] = match
         
         // Convert month to number
-        const months = { 'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5, 
-                        'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11 }
+        const months = { 
+          'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5, 
+          'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11 
+        }
         
         const monthNum = months[month as keyof typeof months] || 0
         
