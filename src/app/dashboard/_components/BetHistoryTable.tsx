@@ -11,11 +11,12 @@ import {
   FilterIcon, 
   InfoIcon, 
   SearchIcon, 
-  XIcon 
+  XIcon,
+  CalendarIcon
 } from "lucide-react"
 import Link from "next/link"
 import { createURL } from "@/lib/utils"
-import { format } from "date-fns"
+import { format, isAfter, isBefore, isWithinInterval } from "date-fns"
 import {
   Tooltip,
   TooltipContent,
@@ -37,6 +38,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
+import { DateRangePicker } from "@/components/DateRangePicker"
+import { DateRange } from "react-day-picker"
 
 interface ParlayLeg {
   id: string
@@ -86,6 +89,7 @@ export function BetHistoryTable({
   const [leagueFilter, setLeagueFilter] = useState<string>("All")
   const [showFilters, setShowFilters] = useState(false)
   const [filteredBets, setFilteredBets] = useState<Bet[]>(bets)
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
 
   // Effect to update filtered bets when filters change
   useEffect(() => {
@@ -115,6 +119,29 @@ export function BetHistoryTable({
       result = result.filter(bet => bet.league === leagueFilter)
     }
     
+    // Apply date range filter
+    if (dateRange && dateRange.from) {
+      result = result.filter(bet => {
+        if (!bet.date) return false
+        const betDate = new Date(bet.date)
+        
+        // If only "from" date is selected
+        if (dateRange.from && !dateRange.to) {
+          return isAfter(betDate, dateRange.from) || betDate.getTime() === dateRange.from.getTime()
+        }
+        
+        // If both "from" and "to" dates are selected
+        if (dateRange.from && dateRange.to) {
+          return isWithinInterval(betDate, {
+            start: dateRange.from,
+            end: dateRange.to
+          })
+        }
+        
+        return true
+      })
+    }
+    
     // Apply search filter
     if (searchTerm) {
       const search = searchTerm.toLowerCase()
@@ -129,7 +156,7 @@ export function BetHistoryTable({
     }
     
     setFilteredBets(result)
-  }, [bets, searchTerm, betTypeFilter, resultFilter, leagueFilter])
+  }, [bets, searchTerm, betTypeFilter, resultFilter, leagueFilter, dateRange])
 
   // Safeguard against null/undefined bets array
   if (!bets || !Array.isArray(bets) || bets.length === 0) {
@@ -196,6 +223,7 @@ export function BetHistoryTable({
     setBetTypeFilter("All")
     setResultFilter("All")
     setLeagueFilter("All")
+    setDateRange(undefined)
   }
 
   // Toggle expand all parlays
@@ -225,8 +253,18 @@ export function BetHistoryTable({
     parlays: filteredBets.filter(bet => bet.type === "Parlay").length
   }
 
+  // Calculate profits for filtered bets
+  const totalProfit = filteredBets.reduce((sum, bet) => sum + (bet.profit || 0), 0)
+  const profitLossText = totalProfit >= 0 
+    ? `$${totalProfit.toFixed(2)} profit` 
+    : `$${Math.abs(totalProfit).toFixed(2)} loss`
+
   // Check if any filters are active
-  const hasActiveFilters = searchTerm !== "" || betTypeFilter !== "All" || resultFilter !== "All" || leagueFilter !== "All"
+  const hasActiveFilters = searchTerm !== "" || 
+    betTypeFilter !== "All" || 
+    resultFilter !== "All" || 
+    leagueFilter !== "All" ||
+    dateRange !== undefined
 
   // Render active filters badges
   const renderFilterBadges = () => {
@@ -259,6 +297,14 @@ export function BetHistoryTable({
           <Badge variant="secondary" className="flex items-center gap-1">
             League: {leagueFilter}
             <XIcon className="h-3 w-3 cursor-pointer" onClick={() => setLeagueFilter("All")} />
+          </Badge>
+        )}
+        
+        {dateRange && dateRange.from && (
+          <Badge variant="secondary" className="flex items-center gap-1">
+            Date: {format(dateRange.from, "MM/dd/yyyy")}
+            {dateRange.to && ` - ${format(dateRange.to, "MM/dd/yyyy")}`}
+            <XIcon className="h-3 w-3 cursor-pointer" onClick={() => setDateRange(undefined)} />
           </Badge>
         )}
         
@@ -327,7 +373,8 @@ export function BetHistoryTable({
       
       {/* Filters row */}
       {showFilters && (
-        <Card className="p-4 mb-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="p-4 mb-4 grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* Bet Type Filter */}
           <div>
             <label className="text-sm font-medium mb-1 block">Bet Type</label>
             <Select value={betTypeFilter} onValueChange={(val) => setBetTypeFilter(val as any)}>
@@ -342,6 +389,7 @@ export function BetHistoryTable({
             </Select>
           </div>
           
+          {/* Result Filter */}
           <div>
             <label className="text-sm font-medium mb-1 block">Result</label>
             <Select value={resultFilter} onValueChange={(val) => setResultFilter(val as any)}>
@@ -358,6 +406,7 @@ export function BetHistoryTable({
             </Select>
           </div>
           
+          {/* League Filter */}
           <div>
             <label className="text-sm font-medium mb-1 block">League</label>
             <Select value={leagueFilter} onValueChange={setLeagueFilter}>
@@ -372,14 +421,28 @@ export function BetHistoryTable({
               </SelectContent>
             </Select>
           </div>
+          
+          {/* Date Range Filter */}
+          <div>
+            <label className="text-sm font-medium mb-1 block">Date Range</label>
+            <DateRangePicker
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+            />
+          </div>
         </Card>
       )}
       
       {/* Filter results stats */}
       {hasActiveFilters && (
-        <div className="text-sm mb-4 text-muted-foreground">
-          Showing {filterStats.filtered} of {filterStats.total} bets 
-          ({filterStats.singles} singles, {filterStats.parlays} parlays)
+        <div className="flex justify-between items-center text-sm mb-4 text-muted-foreground">
+          <div>
+            Showing {filterStats.filtered} of {filterStats.total} bets 
+            ({filterStats.singles} singles, {filterStats.parlays} parlays)
+          </div>
+          <div className={totalProfit >= 0 ? 'text-green-600' : 'text-red-600'}>
+            Filtered bets: {profitLossText}
+          </div>
         </div>
       )}
       
