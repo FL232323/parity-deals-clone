@@ -102,12 +102,12 @@ export default async function BetHistoryPage({
       .limit(pageSize)
       .offset(offset),
       
-      // Get parlay bets - fixed the missing field in COALESCE
+      // Get parlay bets - fixed to use NULL for the league field since parlays don't have leagues
       db.select({
         id: ParlayHeadersTable.id,
         date: ParlayHeadersTable.datePlaced,
         type: sql`'Parlay'`.as('type'),
-        league: sql`COALESCE(${ParlayHeadersTable.league}, '')`.as('league'),
+        league: sql`'Multiple'`.as('league'), // Use 'Multiple' as a placeholder for parlays
         match: sql`COALESCE(${ParlayHeadersTable.match}, '')`.as('match'),
         betType: sql`COALESCE(${ParlayHeadersTable.betType}, '')`.as('betType'),
         selection: sql`COALESCE(${ParlayHeadersTable.selection}, '')`.as('selection'),
@@ -210,25 +210,30 @@ export default async function BetHistoryPage({
       ? `$${totalProfit.toFixed(2)} profit` 
       : `$${Math.abs(totalProfit).toFixed(2)} loss`
     
-    // Get leagues for filtering
-    const [uniqueLeagues, parlayLeagues] = await Promise.all([
-      db.select({
+    // Get leagues for filtering - Only get from single bets and parlay legs
+    const uniqueLeagues = await db
+      .select({
         league: sql`DISTINCT COALESCE(${SingleBetsTable.league}, '')`.as('league')
       })
       .from(SingleBetsTable)
       .where(eq(SingleBetsTable.userId, userId))
-      .orderBy(SingleBetsTable.league),
-      
-      db.select({
-        league: sql`DISTINCT COALESCE(${ParlayHeadersTable.league}, '')`.as('league')
+      .orderBy(SingleBetsTable.league)
+    
+    // Get leagues from parlay legs
+    const parlayLegLeagues = await db
+      .select({
+        league: sql`DISTINCT COALESCE(${ParlayLegsTable.league}, '')`.as('league')
       })
-      .from(ParlayHeadersTable)
+      .from(ParlayLegsTable)
+      .innerJoin(
+        ParlayHeadersTable,
+        eq(ParlayLegsTable.parlayId, ParlayHeadersTable.id)
+      )
       .where(eq(ParlayHeadersTable.userId, userId))
-      .orderBy(ParlayHeadersTable.league)
-    ])
+      .orderBy(ParlayLegsTable.league)
     
     // Combine and deduplicate leagues
-    const leagues = [...uniqueLeagues, ...parlayLeagues]
+    const leagues = [...uniqueLeagues, ...parlayLegLeagues]
       .map(l => l.league)
       .filter((value, index, self) => 
         self.indexOf(value) === index && value !== ""
