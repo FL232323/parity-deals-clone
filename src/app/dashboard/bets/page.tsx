@@ -211,18 +211,23 @@ export default async function BetHistoryPage({
       : `$${Math.abs(totalProfit).toFixed(2)} loss`
     
     // Get leagues for filtering - Only get from single bets and parlay legs
+    // Fix: Use alias in ORDER BY clause to match the SELECT DISTINCT column
+    const leagueColExpression = sql`COALESCE(${SingleBetsTable.league}, '')`.as('league')
     const uniqueLeagues = await db
       .select({
-        league: sql`DISTINCT COALESCE(${SingleBetsTable.league}, '')`.as('league')
+        league: leagueColExpression
       })
       .from(SingleBetsTable)
       .where(eq(SingleBetsTable.userId, userId))
-      .orderBy(SingleBetsTable.league)
+      .orderBy(leagueColExpression)
+      .groupBy(leagueColExpression)
     
     // Get leagues from parlay legs
+    // Fix: Use alias in ORDER BY clause to match the SELECT DISTINCT column
+    const legLeagueColExpression = sql`COALESCE(${ParlayLegsTable.league}, '')`.as('league')
     const parlayLegLeagues = await db
       .select({
-        league: sql`DISTINCT COALESCE(${ParlayLegsTable.league}, '')`.as('league')
+        league: legLeagueColExpression
       })
       .from(ParlayLegsTable)
       .innerJoin(
@@ -230,7 +235,8 @@ export default async function BetHistoryPage({
         eq(ParlayLegsTable.parlayId, ParlayHeadersTable.id)
       )
       .where(eq(ParlayHeadersTable.userId, userId))
-      .orderBy(ParlayLegsTable.league)
+      .orderBy(legLeagueColExpression)
+      .groupBy(legLeagueColExpression)
     
     // Combine and deduplicate leagues
     const leagues = [...uniqueLeagues, ...parlayLegLeagues]
