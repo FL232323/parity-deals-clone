@@ -102,7 +102,7 @@ export default async function BetHistoryPage({
       .limit(pageSize)
       .offset(offset),
       
-      // Get parlay bets
+      // Get parlay bets - fixed the missing field in COALESCE
       db.select({
         id: ParlayHeadersTable.id,
         date: ParlayHeadersTable.datePlaced,
