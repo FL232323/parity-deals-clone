@@ -297,3 +297,105 @@ export function extractBettingData(rows: string[][], userId: string) {
         }
       }
     }
+    // Process parlay legs
+    else if (isParlayLeg(row) && currentParlayId) {
+      currentLegNumber++
+      
+      console.log(`Found parlay leg ${currentLegNumber} for parlay ${currentParlayId}`)
+      
+      const parlayLeg = {
+        parlayId: currentParlayId,
+        legNumber: currentLegNumber,
+        status: getCell(row, COL.STATUS),
+        league: getCell(row, COL.LEAGUE),
+        match: getCell(row, COL.MATCH),
+        market: getCell(row, COL.MARKET),
+        selection: getCell(row, COL.BET_TYPE), // Selection is often in bet type column for legs
+        price: getCellAsNumber(row, COL.PRICE),
+        gameDate: parseDate(getCell(row, COL.RESULT)) // Game date often in result column for legs
+      }
+      
+      // For some formats, the selection might be in a different column 
+      // If selection is empty but we have data in market or potential payout, use that
+      if (!parlayLeg.selection && getCell(row, COL.POTENTIAL_PAYOUT)) {
+        parlayLeg.selection = getCell(row, COL.POTENTIAL_PAYOUT)
+      }
+      
+      // Use BET_TYPE as market and MARKET as selection if market is empty
+      if (!parlayLeg.market && getCell(row, COL.BET_TYPE) && getCell(row, COL.MARKET)) {
+        parlayLeg.market = getCell(row, COL.BET_TYPE)
+        parlayLeg.selection = getCell(row, COL.MARKET)
+      }
+      
+      // Add the leg
+      parlayLegs.push(parlayLeg)
+      
+      console.log(`Processed leg: ${parlayLeg.market} - ${parlayLeg.selection}`)
+      
+      // Process team stats from this leg
+      const teams = extractTeams(parlayLeg.match)
+      teams.forEach(team => {
+        if (!team || team.trim() === '') return
+        
+        if (!teamStatsMap.has(team)) {
+          teamStatsMap.set(team, {
+            userId,
+            team,
+            league: parlayLeg.league,
+            totalBets: 0,
+            wins: 0,
+            losses: 0,
+            pushes: 0,
+            pending: 0
+          })
+        }
+        
+        const stat = teamStatsMap.get(team)!
+        stat.totalBets++
+        
+        const status = (parlayLeg.status || '').toLowerCase()
+        if (status.includes('win')) {
+          stat.wins++
+        } else if (status.includes('lose') || status.includes('lost')) {
+          stat.losses++
+        } else if (status.includes('push')) {
+          stat.pushes++
+        } else {
+          stat.pending++
+        }
+      })
+      
+      // Process player and prop stats
+      const [player, propType] = extractPlayerAndProp(parlayLeg.market)
+      if (player) {
+        if (!playerStatsMap.has(player)) {
+          playerStatsMap.set(player, {
+            userId,
+            player,
+            propTypes: propType ? [propType] : [],
+            totalBets: 0,
+            wins: 0,
+            losses: 0,
+            pushes: 0,
+            pending: 0
+          })
+        }
+        
+        const stat = playerStatsMap.get(player)!
+        stat.totalBets++
+        
+        if (propType && !stat.propTypes?.includes(propType)) {
+          stat.propTypes = [...(stat.propTypes || []), propType]
+        }
+        
+        const status = (parlayLeg.status || '').toLowerCase()
+        if (status.includes('win')) {
+          stat.wins++
+        } else if (status.includes('lose') || status.includes('lost')) {
+          stat.losses++
+        } else if (status.includes('push')) {
+          stat.pushes++
+        } else {
+          stat.pending++
+        }
+      }
