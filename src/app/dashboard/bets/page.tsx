@@ -17,6 +17,7 @@ export default async function BetHistoryPage({
   const { userId, redirectToSignIn } = auth()
   if (!userId) return redirectToSignIn()
   
+  // Set default pagination values
   const page = searchParams.page ? parseInt(searchParams.page) : 1
   const pageSize = 15
   const offset = (page - 1) * pageSize
@@ -24,21 +25,20 @@ export default async function BetHistoryPage({
   try {
     console.log("Fetching betting data for user:", userId)
     
-    // Get total count for pagination first to check if there's any data
-    const singleBetsCount = await db
-      .select({ count: sql`COUNT(*)`.mapWith(Number) })
-      .from(SingleBetsTable)
-      .where(eq(SingleBetsTable.userId, userId))
+    // Get total count of bets for pagination
+    const [singleBetsCount, parlayBetsCount] = await Promise.all([
+      db.select({ count: sql`COUNT(*)`.mapWith(Number) })
+        .from(SingleBetsTable)
+        .where(eq(SingleBetsTable.userId, userId)),
+      
+      db.select({ count: sql`COUNT(*)`.mapWith(Number) })
+        .from(ParlayHeadersTable)
+        .where(eq(ParlayHeadersTable.userId, userId))
+    ])
     
-    const parlayBetsCount = await db
-      .select({ count: sql`COUNT(*)`.mapWith(Number) })
-      .from(ParlayHeadersTable)
-      .where(eq(ParlayHeadersTable.userId, userId))
-    
-    console.log("Data counts:", { singles: singleBetsCount[0]?.count, parlays: parlayBetsCount[0]?.count })
-    
-    // Get summary statistics
-    const totalBets = Number(singleBetsCount[0]?.count || 0) + Number(parlayBetsCount[0]?.count || 0)
+    const singlesCount = Number(singleBetsCount[0]?.count || 0)
+    const parlaysCount = Number(parlayBetsCount[0]?.count || 0)
+    const totalBets = singlesCount + parlaysCount
     const totalPages = Math.ceil(totalBets / pageSize) || 1  // Ensure at least 1 page
     
     // Early return if no data
@@ -80,9 +80,10 @@ export default async function BetHistoryPage({
       )
     }
     
-    // Get single bets - handle NULL values with COALESCE
-    const singleBets = await db
-      .select({
+    // Fetch single bets and parlay bets in parallel for better performance
+    const [singleBets, parlayBets] = await Promise.all([
+      // Get single bets
+      db.select({
         id: SingleBetsTable.id,
         date: SingleBetsTable.datePlaced,
         type: sql`'Single'`.as('type'),
@@ -99,13 +100,10 @@ export default async function BetHistoryPage({
       .where(eq(SingleBetsTable.userId, userId))
       .orderBy(desc(SingleBetsTable.datePlaced))
       .limit(pageSize)
-      .offset(offset)
-    
-    console.log(`Retrieved ${singleBets.length} single bets`)
-    
-    // Get parlay bets - handle NULL values with COALESCE
-    const parlayBets = await db
-      .select({
+      .offset(offset),
+      
+      // Get parlay bets
+      db.select({
         id: ParlayHeadersTable.id,
         date: ParlayHeadersTable.datePlaced,
         type: sql`'Parlay'`.as('type'),
@@ -123,23 +121,22 @@ export default async function BetHistoryPage({
       .orderBy(desc(ParlayHeadersTable.datePlaced))
       .limit(pageSize)
       .offset(offset)
+    ])
     
-    console.log(`Retrieved ${parlayBets.length} parlay bets`)
+    console.log(`Retrieved ${singleBets.length} single bets and ${parlayBets.length} parlay bets`)
     
-    // Safe handling of parlay legs - only proceed if we have parlays
+    // Process parlay legs
     let legsMap: Record<string, any[]> = {}
     
     if (parlayBets && parlayBets.length > 0) {
-      // Get all parlay IDs from the current page and ensure they're valid
+      // Get all valid parlay IDs
       const parlayIds = parlayBets
         .map(bet => bet?.id)
-        .filter(id => id !== undefined && id !== null) as string[]
+        .filter(Boolean) as string[]
       
-      if (parlayIds && parlayIds.length > 0) {
-        console.log("Retrieving legs for parlays:", parlayIds)
-        
+      if (parlayIds.length > 0) {
         try {
-          // Safer approach for IN query - query each parlay separately to avoid parameter limits
+          // Fetch legs for each parlay to avoid long IN queries that could fail
           const allLegs = []
           
           for (const parlayId of parlayIds) {
@@ -163,82 +160,79 @@ export default async function BetHistoryPage({
             allLegs.push(...legs)
           }
           
-          console.log(`Retrieved ${allLegs.length} parlay legs for ${parlayIds.length} parlays`)
-          
-          // Group legs by parlay ID
-          if (allLegs && allLegs.length > 0) {
-            legsMap = allLegs.reduce((acc, leg) => {
-              if (leg && leg.parlayId) {
-                if (!acc[leg.parlayId]) {
-                  acc[leg.parlayId] = []
-                }
-                acc[leg.parlayId].push(leg)
+          // Group legs by parlay ID for easy lookup
+          legsMap = allLegs.reduce((acc, leg) => {
+            if (leg && leg.parlayId) {
+              if (!acc[leg.parlayId]) {
+                acc[leg.parlayId] = []
               }
-              return acc
-            }, {} as Record<string, any[]>)
-          }
+              acc[leg.parlayId].push(leg)
+            }
+            return acc
+          }, {} as Record<string, any[]>)
         } catch (error) {
           console.error("Error fetching parlay legs:", error)
-          // Continue with empty legs map
+          // Continue with empty legs map on error
         }
       }
     }
     
-    // Combine and sort by date
-    const bets = [...(singleBets || []), ...(parlayBets || [])]
-      .filter(bet => bet !== null && bet !== undefined)
+    // Combine and sort all bets by date
+    const bets = [...singleBets, ...parlayBets]
+      .filter(Boolean)
       .sort((a, b) => {
-        if (!a?.date || !b?.date) return 0
-        return new Date(b.date).getTime() - new Date(a.date).getTime()
+        // Handle null/undefined dates
+        const dateA = a?.date ? new Date(a.date).getTime() : 0
+        const dateB = b?.date ? new Date(b.date).getTime() : 0
+        return dateB - dateA
       })
       .slice(0, pageSize)
     
-    console.log(`Combining bets - total: ${bets.length}`)
-    
-    // Get betting summary for display
-    const allBets = await db
-      .select({
+    // Get summary stats for display
+    const [singleBetStats, parlayBetStats] = await Promise.all([
+      db.select({
         profit: sql`COALESCE(SUM(${SingleBetsTable.winnings}), 0)`.mapWith(Number),
         count: sql`COUNT(*)`.mapWith(Number)
       })
       .from(SingleBetsTable)
-      .where(eq(SingleBetsTable.userId, userId))
-    
-    const allParlays = await db
-      .select({
+      .where(eq(SingleBetsTable.userId, userId)),
+      
+      db.select({
         profit: sql`COALESCE(SUM(${ParlayHeadersTable.winnings}), 0)`.mapWith(Number),
         count: sql`COUNT(*)`.mapWith(Number)
       })
       .from(ParlayHeadersTable)
       .where(eq(ParlayHeadersTable.userId, userId))
+    ])
     
-    const totalProfit = (allBets[0]?.profit || 0) + (allParlays[0]?.profit || 0)
+    const totalProfit = (singleBetStats[0]?.profit || 0) + (parlayBetStats[0]?.profit || 0)
     const profitLossText = totalProfit >= 0 
       ? `$${totalProfit.toFixed(2)} profit` 
       : `$${Math.abs(totalProfit).toFixed(2)} loss`
     
-    // Get unique leagues for filtering
-    const uniqueLeagues = await db
-      .select({
+    // Get leagues for filtering
+    const [uniqueLeagues, parlayLeagues] = await Promise.all([
+      db.select({
         league: sql`DISTINCT COALESCE(${SingleBetsTable.league}, '')`.as('league')
       })
       .from(SingleBetsTable)
       .where(eq(SingleBetsTable.userId, userId))
-      .orderBy(SingleBetsTable.league)
-    
-    // Additional leagues from parlays
-    const parlayLeagues = await db
-      .select({
+      .orderBy(SingleBetsTable.league),
+      
+      db.select({
         league: sql`DISTINCT COALESCE(${ParlayHeadersTable.league}, '')`.as('league')
       })
       .from(ParlayHeadersTable)
       .where(eq(ParlayHeadersTable.userId, userId))
       .orderBy(ParlayHeadersTable.league)
+    ])
     
-    // Combine all unique leagues
+    // Combine and deduplicate leagues
     const leagues = [...uniqueLeagues, ...parlayLeagues]
       .map(l => l.league)
-      .filter((value, index, self) => self.indexOf(value) === index && value !== "")
+      .filter((value, index, self) => 
+        self.indexOf(value) === index && value !== ""
+      )
       .sort()
     
     return (
@@ -277,7 +271,7 @@ export default async function BetHistoryPage({
           <Card className="p-4">
             <h3 className="text-sm font-medium text-muted-foreground mb-1">Bet Types</h3>
             <div className="text-2xl font-bold">
-              {allBets[0]?.count || 0} Singles / {allParlays[0]?.count || 0} Parlays
+              {singleBetStats[0]?.count || 0} Singles / {parlayBetStats[0]?.count || 0} Parlays
             </div>
           </Card>
         </div>
