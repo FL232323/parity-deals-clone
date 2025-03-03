@@ -23,13 +23,14 @@ export function extractBettingData(rows: string[][], userId: string) {
     MATCH: 3,
     BET_TYPE: 4,
     MARKET: 5,
-    PRICE: 6,
-    WAGER: 7,
-    WINNINGS: 8,
-    PAYOUT: 9,
-    POTENTIAL_PAYOUT: 10,
-    RESULT: 11,
-    BET_SLIP_ID: 12
+    SELECTION: 6,
+    PRICE: 7,
+    WAGER: 8,
+    WINNINGS: 9,
+    PAYOUT: 10,
+    POTENTIAL_PAYOUT: 11,
+    RESULT: 12,
+    BET_SLIP_ID: 13
   }
   
   // Helper functions
@@ -43,6 +44,9 @@ export function extractBettingData(rows: string[][], userId: string) {
     const trimmed = matchStr.trim()
     if (trimmed.includes(' vs ')) {
       return trimmed.split(' vs ').map(team => team.trim())
+    }
+    if (trimmed.includes(' @ ')) {
+      return trimmed.split(' @ ').map(team => team.trim())
     }
     return []
   }
@@ -66,7 +70,9 @@ export function extractBettingData(rows: string[][], userId: string) {
    * Get safe string from row at index
    */
   function getCell(row: string[], index: number): string {
-    return (row[index] || "").trim()
+    // Check array bounds and handle nullish values
+    if (!row || index >= row.length) return ""
+    return (row[index] || "").toString().trim()
   }
   
   /**
@@ -76,7 +82,9 @@ export function extractBettingData(rows: string[][], userId: string) {
     const value = getCell(row, index)
     if (!value) return undefined
     
-    const num = parseFloat(value)
+    // Remove currency symbols and commas
+    const cleanValue = value.replace(/[$,]/g, '')
+    const num = parseFloat(cleanValue)
     return isNaN(num) ? undefined : num
   }
   
@@ -89,7 +97,10 @@ export function extractBettingData(rows: string[][], userId: string) {
     // 2. Has "MULTIPLE" in the bet type column
     return (
       row.length > COL.BET_TYPE && 
-      getCell(row, COL.BET_TYPE) === "MULTIPLE" &&
+      (
+        getCell(row, COL.BET_TYPE).toUpperCase() === "MULTIPLE" ||
+        getCell(row, COL.BET_TYPE).toUpperCase().includes("PARLAY")
+      ) &&
       isDateString(getCell(row, COL.DATE))
     )
   }
@@ -101,10 +112,14 @@ export function extractBettingData(rows: string[][], userId: string) {
     // Check if the row has the typical structure of a single bet:
     // 1. Has a date/time in the first column
     // 2. Doesn't have "MULTIPLE" in the bet type column
+    // 3. Has some meaningful data
     return (
       row.length > COL.BET_TYPE && 
       getCell(row, COL.BET_TYPE) !== "MULTIPLE" &&
-      isDateString(getCell(row, COL.DATE))
+      !getCell(row, COL.BET_TYPE).toUpperCase().includes("PARLAY") &&
+      isDateString(getCell(row, COL.DATE)) &&
+      // Ensure there's some actual data in the row
+      (getCell(row, COL.MATCH) !== "" || getCell(row, COL.MARKET) !== "")
     )
   }
   
@@ -116,28 +131,132 @@ export function extractBettingData(rows: string[][], userId: string) {
     // 1. First column (date) is typically empty for legs
     // 2. Contains data in status, league, etc.
     return (
-      row.length > COL.STATUS &&
+      row.length > COL.LEAGUE &&
       getCell(row, COL.DATE) === "" && // Empty date cell
-      getCell(row, COL.STATUS) !== "" && // Has status
-      getCell(row, COL.LEAGUE) !== "" // Has league
+      (
+        getCell(row, COL.STATUS) !== "" || // Has status
+        getCell(row, COL.LEAGUE) !== "" || // Has league
+        getCell(row, COL.MATCH) !== "" // Has match
+      )
     )
+  }
+  
+  /**
+   * Check if a string looks like a date
+   */
+  function isDateString(str: string): boolean {
+    if (!str || str.trim() === "") return false
+    
+    // Common date patterns
+    const datePatterns = [
+      // Date with @ time pattern - e.g., "9 Feb 2023 @ 4:08pm"
+      /^\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+@\s+\d{1,2}:\d{2}(am|pm)/i,
+      // ISO date pattern - e.g., "2023-02-09T16:08:00"
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
+      // Standard date pattern - e.g., "02/09/2023"
+      /^\d{2}\/\d{2}\/\d{4}/,
+      // Month day, year pattern - e.g., "February 9, 2023"
+      /^[A-Za-z]{3,}\s+\d{1,2},\s+\d{4}/,
+      // Day-month-year pattern - e.g., "9-Feb-2023"
+      /^\d{1,2}-[A-Za-z]{3}-\d{4}/,
+      // Day.month.year pattern - e.g., "09.02.2023"
+      /^\d{1,2}\.\d{1,2}\.\d{4}/
+    ]
+    
+    return datePatterns.some(pattern => pattern.test(str.trim()))
+  }
+  
+  /**
+   * Parse a date string to Date object
+   */
+  function parseDate(dateStr: string): Date | null {
+    if (!dateStr || dateStr.trim() === "") return null
+    
+    try {
+      // Try built-in date parsing first
+      const date = new Date(dateStr)
+      if (isValidDate(date)) return date
+      
+      // Handle custom formats
+      const trimmed = dateStr.trim()
+      
+      // Format: "9 Feb 2023 @ 4:08pm"
+      const customFormat = /^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})\s+@\s+(\d{1,2}):(\d{2})(am|pm)/i
+      const match = trimmed.match(customFormat)
+      
+      if (match) {
+        const [_, day, monthStr, year, hour, minute, ampm] = match
+        
+        // Convert month name to month number (0-11)
+        const months: { [key: string]: number } = {
+          jan: 0, january: 0,
+          feb: 1, february: 1,
+          mar: 2, march: 2,
+          apr: 3, april: 3,
+          may: 4,
+          jun: 5, june: 5,
+          jul: 6, july: 6,
+          aug: 7, august: 7,
+          sep: 8, september: 8,
+          oct: 9, october: 9,
+          nov: 10, november: 10,
+          dec: 11, december: 11
+        }
+        
+        const month = months[monthStr.toLowerCase()]
+        if (month === undefined) return null
+        
+        // Parse hour, adjusting for 12-hour format
+        let hourNum = parseInt(hour)
+        if (ampm.toLowerCase() === 'pm' && hourNum < 12) {
+          hourNum += 12
+        } else if (ampm.toLowerCase() === 'am' && hourNum === 12) {
+          hourNum = 0
+        }
+        
+        const result = new Date(
+          parseInt(year),
+          month,
+          parseInt(day),
+          hourNum,
+          parseInt(minute)
+        )
+        
+        return isValidDate(result) ? result : null
+      }
+      
+      // If no custom format matched, return null
+      return null
+    } catch (error) {
+      console.error("Error parsing date:", dateStr, error)
+      return null
+    }
+  }
+  
+  /**
+   * Check if a date object is valid
+   */
+  function isValidDate(date: any): boolean {
+    return date instanceof Date && !isNaN(date.getTime())
   }
   
   // Process each row of data
   let currentParlayId: string | null = null
   let currentLegNumber = 0
+  let parlayIdCounter = 1 // Used to generate IDs when none provided
   
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     
-    // Skip rows that are too short
-    if (!row || row.length < 5) {
+    // Skip rows that are too short or empty
+    if (!row || row.length < 5 || row.every(cell => !cell || cell.trim() === "")) {
       continue
     }
     
     // Process parlay header
     if (isParlay(row)) {
-      const betId = getCell(row, COL.BET_SLIP_ID)
+      // Get bet ID or generate one if not available
+      const betId = getCell(row, COL.BET_SLIP_ID) || `generated-parlay-${parlayIdCounter++}`
       currentParlayId = betId
       currentLegNumber = 0
       
@@ -151,6 +270,7 @@ export function extractBettingData(rows: string[][], userId: string) {
         match: getCell(row, COL.MATCH),
         betType: getCell(row, COL.BET_TYPE),
         market: getCell(row, COL.MARKET),
+        selection: getCell(row, COL.SELECTION),
         price: getCellAsNumber(row, COL.PRICE),
         wager: getCellAsNumber(row, COL.WAGER),
         winnings: getCellAsNumber(row, COL.WINNINGS),
@@ -171,7 +291,7 @@ export function extractBettingData(rows: string[][], userId: string) {
     }
     // Process single bet
     else if (isSingleBet(row)) {
-      const betId = getCell(row, COL.BET_SLIP_ID)
+      const betId = getCell(row, COL.BET_SLIP_ID) || `generated-single-${parlayIdCounter++}`
       currentParlayId = null // Reset current parlay
       
       console.log(`Found single bet: ${getCell(row, COL.DATE)}`)
@@ -184,6 +304,7 @@ export function extractBettingData(rows: string[][], userId: string) {
         match: getCell(row, COL.MATCH),
         betType: getCell(row, COL.BET_TYPE),
         market: getCell(row, COL.MARKET),
+        selection: getCell(row, COL.SELECTION) || getCell(row, COL.BET_TYPE), // Sometimes selection is in bet type
         price: getCellAsNumber(row, COL.PRICE),
         wager: getCellAsNumber(row, COL.WAGER),
         winnings: getCellAsNumber(row, COL.WINNINGS),
@@ -310,7 +431,7 @@ export function extractBettingData(rows: string[][], userId: string) {
         league: getCell(row, COL.LEAGUE),
         match: getCell(row, COL.MATCH),
         market: getCell(row, COL.MARKET),
-        selection: getCell(row, COL.BET_TYPE), // Selection is often in bet type column for legs
+        selection: getCell(row, COL.SELECTION) || getCell(row, COL.BET_TYPE), // Selection is often in bet type column for legs
         price: getCellAsNumber(row, COL.PRICE),
         gameDate: parseDate(getCell(row, COL.RESULT)) // Game date often in result column for legs
       }
@@ -399,3 +520,44 @@ export function extractBettingData(rows: string[][], userId: string) {
           stat.pending++
         }
       }
+      
+      if (propType) {
+        if (!propStatsMap.has(propType)) {
+          propStatsMap.set(propType, {
+            userId,
+            propType,
+            totalBets: 0,
+            wins: 0,
+            losses: 0,
+            pushes: 0,
+            pending: 0
+          })
+        }
+        
+        const stat = propStatsMap.get(propType)!
+        stat.totalBets++
+        
+        const status = (parlayLeg.status || '').toLowerCase()
+        if (status.includes('win')) {
+          stat.wins++
+        } else if (status.includes('lose') || status.includes('lost')) {
+          stat.losses++
+        } else if (status.includes('push')) {
+          stat.pushes++
+        } else {
+          stat.pending++
+        }
+      }
+    }
+  }
+  
+  // Convert map values to arrays
+  return {
+    singleBets,
+    parlayHeaders,
+    parlayLegs,
+    teamStats: Array.from(teamStatsMap.values()),
+    playerStats: Array.from(playerStatsMap.values()),
+    propStats: Array.from(propStatsMap.values())
+  }
+}
